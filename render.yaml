@@ -31,6 +31,12 @@ services:
       # which Render sets to https://<service>.onrender.com. PayPal sends buyers back here.
       - key: PUBLIC_BASE_URL
         sync: false
+      # Order store (Supabase project "hackapal", Singapore). The URL isn't secret.
+      - key: SUPABASE_URL
+        value: https://bfnxvbesrsjnfaionbcj.supabase.co
+      # Secret key (sb_secret_...): bypasses RLS, server only. Set it in the Render dashboard.
+      - key: SUPABASE_SECRET_KEY
+        sync: false
       # Optional seller ping (Phase 5).
       - key: TELEGRAM_BOT_TOKEN
         sync: false

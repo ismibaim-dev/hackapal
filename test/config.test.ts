@@ -19,6 +19,16 @@ describe('loadConfig', () => {
     );
   });
 
+  it("falls back to Render's RENDER_EXTERNAL_URL, but an explicit PUBLIC_BASE_URL wins", () => {
+    expect(loadConfig({ RENDER_EXTERNAL_URL: 'https://hackapal.onrender.com' }).publicBaseUrl).toBe(
+      'https://hackapal.onrender.com',
+    );
+    expect(
+      loadConfig({ RENDER_EXTERNAL_URL: 'https://hackapal.onrender.com', PUBLIC_BASE_URL: 'https://shop.example/' })
+        .publicBaseUrl,
+    ).toBe('https://shop.example');
+  });
+
   it('treats blank values from a fresh .env copy as unset and trims the rest', () => {
     const config = loadConfig({ PORT: '', PAYPAL_CLIENT_ID: '   ', PAYPAL_WEBHOOK_ID: ' WH-123 ' });
     expect(config.port).toBe(3000);

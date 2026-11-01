@@ -17,12 +17,12 @@ hackapal is an agent-ready micro-store for the PayPal AI Hackathon (Devpost, dea
 - Retry 429/5xx with backoff (POSTs are safe to retry thanks to `PayPal-Request-Id`). Log the PayPal `debug_id` on every error.
 - Verify webhook signatures with the raw request body embedded unmodified. There is no global `express.json()` for that reason.
 - Orders v2 only: no `v1/payments`, NVP or SOAP. Prefer `@paypal/paypal-server-sdk`; use `fetch` only where the SDK doesn't cover a call.
-- Before writing PayPal code, consult the PayPal AI Toolkit's `paypal-best-practices` skill and the APIMatic ContextMatic plugin, and log each use in `docs/BUILD_LOG.md` (needed for sponsor prizes).
+- Before writing PayPal code, consult the PayPal AI Toolkit's `paypal-best-practices` skill (vendored in `.claude/skills/paypal-best-practices/`) and the APIMatic ContextMatic plugin, and log each use in `docs/BUILD_LOG.md` (APIMatic use is needed for its sponsor prize). If a tool is missing, say so in one line, log it, and continue with PayPal's REST docs.
 
 ## Conventions
 
 - Node 22 LTS, TypeScript strict ESM (`NodeNext`, so relative imports end in `.js`), Express 5, zod 4, vitest 5. MCP via `@modelcontextprotocol/sdk`.
 - The owner develops on Windows 10: npm scripts and tsx only, no bash-only commands in scripts or docs, no `rm -rf`.
-- Branch `day1-spike`, small Conventional Commits, draft PR.
+- Branch `claude/pensive-faraday-ina38x` (`day1-spike` is retired), small Conventional Commits, draft PR.
 - Before pushing, run `npm run typecheck` and `npm test`, plus `npm run build` if `src` changed.
 - When a step needs the owner (dashboard clicks, credentials, deploys, approving a sandbox payment), stop, give exact step-by-step instructions, and wait.

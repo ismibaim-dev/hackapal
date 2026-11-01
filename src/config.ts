@@ -13,6 +13,8 @@ export function loadDotEnv(path = '.env'): void {
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   PUBLIC_BASE_URL: z.url({ protocol: /^https?$/, error: 'PUBLIC_BASE_URL must be an http(s) URL' }).optional(),
+  // Set by Render on every web service (https://<service>.onrender.com). Fallback for PUBLIC_BASE_URL.
+  RENDER_EXTERNAL_URL: z.url({ protocol: /^https?$/, error: 'RENDER_EXTERNAL_URL must be an http(s) URL' }).optional(),
   // Sandbox only for this project. Anything else fails at startup on purpose.
   PAYPAL_ENV: z
     .literal('sandbox', { error: 'PAYPAL_ENV must be "sandbox" (live payments are out of scope)' })
@@ -73,7 +75,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   return {
     port: e.PORT,
-    publicBaseUrl: (e.PUBLIC_BASE_URL ?? `http://localhost:${e.PORT}`).replace(/\/+$/, ''),
+    publicBaseUrl: (e.PUBLIC_BASE_URL ?? e.RENDER_EXTERNAL_URL ?? `http://localhost:${e.PORT}`).replace(/\/+$/, ''),
     paypal: {
       env: e.PAYPAL_ENV,
       clientId: e.PAYPAL_CLIENT_ID,

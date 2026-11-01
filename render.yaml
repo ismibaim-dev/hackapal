@@ -1,0 +1,36 @@
+# Render Blueprint: one Node web service for the hackapal spike.
+# Dashboard: New > Blueprint > pick this repo and the branch to deploy.
+# Node comes from .node-version (22). NODE_ENV is deliberately not set to production:
+# `npm ci` would then skip the devDependencies (TypeScript) that the build needs.
+services:
+  - type: web
+    name: hackapal
+    runtime: node
+    region: singapore
+    # The paid "Starter" size (0.5 CPU, 512 MB). Free instances sleep when idle, which
+    # would drop PayPal webhooks and stall the demo.
+    plan: 0.5c-512mb
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PAYPAL_ENV
+        value: sandbox
+      # Secrets: Render asks for these once, when the Blueprint is created. Never commit them.
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      # Fill in after creating the sandbox webhook that points at /webhooks/paypal.
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      # Optional override. Leave empty on Render: the app falls back to RENDER_EXTERNAL_URL,
+      # which Render sets to https://<service>.onrender.com. PayPal sends buyers back here.
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # Optional seller ping (Phase 5).
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false

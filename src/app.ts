@@ -1,14 +1,24 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { apiRoutes } from './api-routes.js';
 import { hasPayPalCredentials, type AppConfig } from './config.js';
 import { log } from './log.js';
+import type { OrderService } from './orders.js';
+import type { PayPalGateway } from './paypal.js';
+import { PayPalHttpError } from './paypal-http.js';
+import { paypalRoutes } from './paypal-routes.js';
 
 export interface AppDeps {
   config: AppConfig;
+  /** Present when PayPal credentials are configured (see server.ts). */
+  orders?: OrderService;
+  paypal?: PayPalGateway;
 }
 
-export function createApp({ config }: AppDeps): Express {
+export function createApp({ config, orders, paypal }: AppDeps): Express {
   const app = express();
   app.disable('x-powered-by');
+  // Render terminates TLS in front of us; trust its X-Forwarded-* headers.
+  app.set('trust proxy', 1);
 
   // No global express.json() on purpose: the PayPal webhook route needs the raw,
   // unmodified body to verify the signature, so body parsers are mounted per route.
@@ -28,13 +38,33 @@ export function createApp({ config }: AppDeps): Express {
     });
   });
 
+  if (orders && paypal) {
+    app.use(paypalRoutes({ orders, paypal, webhookId: config.paypal.webhookId }));
+    app.use('/api', apiRoutes({ orders }));
+  } else {
+    app.use(['/paypal', '/webhooks', '/api'], (_req, res) => {
+      res.status(503).json({ error: 'paypal_not_configured' });
+    });
+  }
+
   app.use((req, res) => {
     res.status(404).json({ error: 'not_found', path: req.path });
   });
 
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
-    log.error('unhandled error', { err, method: req.method, path: req.path });
     if (res.headersSent) return;
+    if (err instanceof PayPalHttpError) {
+      // Already logged with its debug_id where it happened.
+      res.status(502).json({ error: 'paypal_error', message: err.message, debug_id: err.debugId ?? null });
+      return;
+    }
+    const status = (err as { status?: unknown } | null)?.status;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      // Body parser errors: malformed JSON, payload too large.
+      res.status(status).json({ error: status === 413 ? 'payload_too_large' : 'invalid_request' });
+      return;
+    }
+    log.error('unhandled error', { err, method: req.method, path: req.path });
     res.status(500).json({ error: 'internal_error' });
   });
 

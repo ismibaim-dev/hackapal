@@ -43,7 +43,8 @@ export interface PayPalRequest {
   method: 'GET' | 'POST';
   url: string;
   headers?: Record<string, string>;
-  body?: string;
+  /** Bytes are sent as-is (the webhook verify call splices the raw event body in). */
+  body?: string | Uint8Array;
   /** Required for POST. Sent as PayPal-Request-Id, identical on every retry. */
   requestId?: string;
 }

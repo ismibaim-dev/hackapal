@@ -12,6 +12,8 @@ export interface AccessToken {
   value: string;
   /** Epoch ms when PayPal says it expires. */
   expiresAt: number;
+  /** Epoch ms after which we fetch a new one (expiresAt minus the refresh margin). */
+  refreshAt: number;
 }
 
 export interface PayPalAuthOptions {
@@ -60,7 +62,7 @@ export class PayPalAuth {
   /** The cached token if it is still fresh, without fetching. */
   peek(): AccessToken | undefined {
     const cached = this.#cached;
-    return cached && cached.expiresAt - this.#marginMs > this.#now() ? cached : undefined;
+    return cached && cached.refreshAt > this.#now() ? cached : undefined;
   }
 
   /** Drop the cached token, e.g. after PayPal answered 401. */
@@ -86,7 +88,10 @@ export class PayPalAuth {
     if (typeof body?.access_token !== 'string' || typeof body.expires_in !== 'number') {
       throw new Error(`PayPal oauth.token returned an unexpected body (debug_id ${response.debugId ?? 'n/a'})`);
     }
-    const token = { value: body.access_token, expiresAt: this.#now() + body.expires_in * 1000 };
+    const expiresAt = this.#now() + body.expires_in * 1000;
+    // Short-lived tokens (never seen from PayPal, but possible) still get half their life.
+    const margin = Math.min(this.#marginMs, (body.expires_in * 1000) / 2);
+    const token = { value: body.access_token, expiresAt, refreshAt: expiresAt - margin };
     this.#cached = token;
     return token;
   }

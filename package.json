@@ -1,0 +1,33 @@
+{
+  "name": "hackapal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-ready micro-store: a shop AI assistants can browse and buy from over MCP, paid with PayPal.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "money-path": "tsx scripts/money-path.ts",
+    "mcp-smoke": "tsx scripts/mcp-smoke.ts",
+    "probe-paypal-mcp": "tsx scripts/probe-paypal-mcp.ts"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

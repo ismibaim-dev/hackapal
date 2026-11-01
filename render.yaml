@@ -7,9 +7,11 @@ services:
     name: hackapal
     runtime: node
     region: singapore
-    # The paid "Starter" size (0.5 CPU, 512 MB). Free instances sleep when idle, which
-    # would drop PayPal webhooks and stall the demo.
-    plan: 0.5c-512mb
+    # Free for now (no card needed). It sleeps after ~15 min without traffic (the next
+    # request waits ~1 min) and a restart wipes the in-memory order store. Before judging:
+    # Supabase store, plus an uptime pinger on /health or the paid 0.5c-512mb size.
+    # See docs/BUILD_LOG.md, design decision 14.
+    plan: free
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /health

@@ -49,6 +49,20 @@ async function createOrder(base: string, body: unknown = { items: [{ product_id:
   return { res, body: (await res.json()) as Record<string, unknown> };
 }
 
+describe('GET /health', () => {
+  it('answers without touching PayPal or the store, even if PayPal never responds', async () => {
+    const { base, paypal } = await start();
+    const never = () => new Promise<never>(() => undefined);
+    paypal.createOrder = never;
+    paypal.getOrder = never;
+    paypal.captureOrder = never;
+    paypal.verifyWebhookSignature = never;
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2_000) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: 'ok', paypal: { credentialsConfigured: true, webhookConfigured: true } });
+  });
+});
+
 describe('/api/orders', () => {
   it('creates an order priced from the catalog, ignoring any price the client sends', async () => {
     const { base } = await start();
@@ -161,6 +175,25 @@ describe('POST /webhooks/paypal', () => {
     expect(view.webhooks_received).toEqual([
       expect.objectContaining({ event_id: 'WH-1', event_type: 'CHECKOUT.ORDER.APPROVED' }),
     ]);
+  });
+
+  it('handles a redelivered event (PayPal retry) without acting twice', async () => {
+    const { base, paypal, store } = await start();
+    const { body } = await createOrder(base);
+    paypal.approve(String(body.paypal_order_id));
+    const raw = JSON.stringify({ id: 'WH-RETRY', event_type: 'CHECKOUT.ORDER.APPROVED', resource: { id: body.paypal_order_id } });
+
+    const first = await fetch(`${base}/webhooks/paypal`, { method: 'POST', headers, body: raw });
+    await eventually(async () => (await store.get(String(body.order_id)))?.status === 'COMPLETED');
+    const second = await fetch(`${base}/webhooks/paypal`, { method: 'POST', headers, body: raw });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect(paypal.verifyCalls).toHaveLength(2);
+    expect(paypal.captureCalls).toHaveLength(1);
+    // The event-id dedupe caught the second delivery: it was never recorded or processed.
+    const view = (await (await fetch(`${base}/api/orders/${body.order_id}`)).json()) as Record<string, unknown>;
+    expect(view.webhooks_received).toEqual([expect.objectContaining({ event_id: 'WH-RETRY' })]);
   });
 
   it('rejects an unverified event with 400 and does not process it', async () => {

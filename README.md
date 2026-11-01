@@ -50,6 +50,7 @@ npm test
 | `PAYPAL_WEBHOOK_ID` | webhooks | ID of the sandbox webhook that points at `/webhooks/paypal`. |
 | `PUBLIC_BASE_URL` | buyer redirects | Where PayPal sends the buyer back. Defaults to Render's `RENDER_EXTERNAL_URL` when present, else `http://localhost:$PORT`. |
 | `PORT` | optional | Defaults to 3000. Render sets it for you. |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | persistent orders | Supabase project URL and secret key (server only). Without both, orders live in memory and vanish on restart. Schema: `supabase/migrations/`. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | optional | Seller ping on new paid orders. Both or neither. |
 | `LOG_LEVEL` | optional | `debug`, `info` (default), `warn`, `error` or `silent`. |
 
@@ -77,6 +78,7 @@ src/
   catalog.ts  the demo shop and its products
   pricing.ts  server-side cart pricing and validation
   store.ts    order store interface + in-memory implementation
+  supabase-store.ts  the same store on Supabase Postgres (public.orders)
   orders.ts   order service: create, capture (single-flight), webhooks, status
   paypal.ts   PayPal Orders v2 via @paypal/paypal-server-sdk + webhook verification
   paypal-auth.ts  OAuth token cache shared by the SDK and fetch calls

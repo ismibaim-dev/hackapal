@@ -318,7 +318,7 @@ describe('PayPalClient.verifyWebhookSignature', () => {
     const call = f.calls.find((c) => c.url.endsWith('/v1/notifications/verify-webhook-signature'))!;
     expect(call.init.method).toBe('POST');
     expect(call.headers.get('authorization')).toBe('Bearer A21-test-token');
-    expect(call.headers.get('paypal-request-id')).toBe(`verify-${headers['paypal-transmission-id']}`);
+    expect(call.headers.get('paypal-request-id')).toMatch(/^verify-[0-9a-f-]{36}$/);
 
     const sent = Buffer.from(call.init.body as Uint8Array);
     const prefix = Buffer.from(
@@ -335,6 +335,17 @@ describe('PayPalClient.verifyWebhookSignature', () => {
     expect(sent.includes(raw)).toBe(true);
     // And it is still valid JSON whose webhook_event is the original event.
     expect(JSON.parse(sent.toString('utf8')).webhook_event).toEqual(JSON.parse(raw.toString('utf8')));
+  });
+
+  it('uses a fresh PayPal-Request-Id for every delivery, even with the same transmission id', async () => {
+    const { client, f } = verifyClient('SUCCESS');
+    await client.verifyWebhookSignature({ headers, rawBody: raw, webhookId: 'WH-ID-1' });
+    await client.verifyWebhookSignature({ headers, rawBody: Buffer.from('{"id":"WH-OTHER"}'), webhookId: 'WH-ID-1' });
+    const ids = f.calls
+      .filter((c) => c.url.endsWith('/v1/notifications/verify-webhook-signature'))
+      .map((c) => c.headers.get('paypal-request-id'));
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
   });
 
   it('returns false on FAILURE', async () => {

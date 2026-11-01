@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   ApiError,
   CheckoutPaymentIntent,
@@ -204,7 +205,9 @@ export class PayPalClient implements PayPalGateway {
         url: `${this.#baseUrl}/v1/notifications/verify-webhook-signature`,
         headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': 'application/json' },
         body,
-        requestId: `verify-${values.transmission_id}`,
+        // Random per delivery, never derived from the (sender-supplied) transmission id, so a
+        // stored verification result can't be replayed for a different delivery.
+        requestId: `verify-${randomUUID()}`,
       },
       this.#http,
     );

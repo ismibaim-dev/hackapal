@@ -62,7 +62,7 @@ npm test
 | `npm test` | Unit tests (vitest). |
 | `npm run typecheck` | Strict type check of `src`, `scripts` and `test`. |
 | `npm run money-path -- --base-url <url> [--simulate-decline]` | Test 1: creates an order on our server, prints the PayPal link for the sandbox buyer, follows the status to `COMPLETED` and waits for the verified webhook. |
-| `npm run mcp-smoke` | Test 2: call our MCP tools as a client. *Coming in Phase 2.* |
+| `npm run mcp-smoke -- <url>/mcp` | Test 2a: connects to our MCP endpoint, lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
 | `npm run probe-paypal-mcp` | Lists PayPal's sandbox MCP tools with and without `x-feature-flags: commerce:true` (result in the build log). |
 
 ## Project layout
@@ -84,6 +84,7 @@ src/
   paypal-routes.ts  /paypal/return, /paypal/cancel, /webhooks/paypal
   api-routes.ts     /api/orders (internal API for scripts)
   pages.ts    the small HTML pages buyers see after PayPal
+  mcp.ts      POST /mcp: the MCP server (list_products, create_order, get_order_status)
 test/         vitest unit tests
 scripts/      manual end-to-end scripts (money path, MCP smoke, PayPal MCP probe)
 docs/         build log and evidence

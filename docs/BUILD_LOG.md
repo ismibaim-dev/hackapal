@@ -7,9 +7,9 @@ Evidence log for the Day 1 risk spike. Every check is **PASS**, **FAIL** or **PE
 | ID | Check | Status | Evidence |
 | --- | --- | --- | --- |
 | P0 | Scaffold builds, starts, serves `/health`; unit tests green | **PASS** | Session 1: 68 tests passing (`npm test`); `npm run build` then `npm start` served `/health` 200; `PAYPAL_ENV=live` refused to start (exit 1, secret not echoed). |
-| T1a | Money path: create, buyer approves in sandbox, server captures | PENDING | |
-| T1b | Webhook arrives on Render and its signature verifies | PENDING | |
-| T1c | Simulated `INSTRUMENT_DECLINED` goes to `NEEDS_NEW_FUNDING`, buyer re-approves, order reaches `COMPLETED` | PENDING | |
+| T1a | Money path: create, buyer approves in sandbox, server captures | PENDING | Code and tests done (session 2). Waiting for the Render deploy, because the buyer's browser must reach `/paypal/return`. Live sandbox checks so far are under "Session 2". |
+| T1b | Webhook arrives on Render and its signature verifies | PENDING | Waiting for the Render deploy and `PAYPAL_WEBHOOK_ID`. Must be a real capture: simulator events can't verify (see the PayPal skill notes). |
+| T1c | Simulated `INSTRUMENT_DECLINED` goes to `NEEDS_NEW_FUNDING`, buyer re-approves, order reaches `COMPLETED` | PENDING | Code and tests done; run `money-path --simulate-decline` against Render. |
 | T2a | `mcp-smoke` against local and deployed `/mcp`: tools listed, `create_order` returns a real approval link | PENDING | |
 | T2b | claude.ai connector end to end: "buy 2 boxes of cookies from Auntie's Kitchen", total shown, link handed over, approved, `COMPLETED` confirmed via `get_order_status` | PENDING | |
 | P4 | PayPal sandbox MCP tool list without and with `x-feature-flags: commerce:true` | **PASS** (probe ran) | Session 2, 12:45 UTC, `npm run probe-paypal-mcp`: a plain client-credentials REST token works as `Bearer` on `https://mcp.sandbox.paypal.com/sse` (server "PayPal MCP Agent 1.0.0"). 46 tools both times; the commerce flag adds nothing; `search_product`, `create_cart`, `checkout_cart` absent. Streamable HTTP `/mcp` answers 404 to an authenticated POST. See "Phase 4 probe result". |
@@ -40,9 +40,9 @@ Record every real use: date, tool, what was asked, what it said, and which code 
   1. **Orders:** `new OrdersController(client)`; `createOrder({ body, paypalRequestId, prefer })`, `getOrder({ id })`, `captureOrder({ id, paypalRequestId, paypalMockResponse, prefer })`. Bodies use camelCase models (`purchaseUnits`, `unitAmount`, `customId`, `paymentSource.paypal.experienceContext` with `brandName`, `userAction`, `shippingPreference`, `returnUrl`, `cancelUrl`); item `quantity` is a string. -> `src/paypal.ts` uses the SDK for all three Orders calls.
   2. **Per-request headers:** no generic header hook, but the Orders methods take `paypalMockResponse`, which is sent as `PayPal-Mock-Response`. -> The simulated decline goes through the SDK; no `fetch` fallback needed for it.
   3. **Token:** the SDK fetches and refreshes on its own, and `clientCredentialsAuthCredentials` accepts `oAuthTokenProvider(lastToken, authManager)`, `oAuthOnTokenUpdate` and `oAuthClockSkew`. -> We plug our own cache into `oAuthTokenProvider`, so the SDK and our `fetch` calls (webhook verification, not in the SDK) share one token.
-  4. **Retries:** `maxNumberOfRetries` defaults to 0 and `httpMethodsToRetry` to GET and PUT, so **POST is not retried by default**. -> We list POST explicitly (safe: every POST carries a `PayPal-Request-Id`).
+  4. **Retries:** `maxNumberOfRetries` defaults to 0 and `httpMethodsToRetry` to GET and PUT, so **POST is not retried by default**. -> We first enabled POST retries in the SDK, then measured (correction (d) below) and moved retries into our wrapper instead.
   5. **Errors:** Orders failures throw `CustomError` (extends `ApiError`: `statusCode`, `headers`, `body`, `result`). -> Our error mapper reads those.
-  - **Corrections from reading the installed source** (`@apimatic/core` 0.10.30), worth telling APIMatic: (a) `retryConfig.maximumRetryWaitTime` defaults to 0 and is the *total* wait budget, so with the defaults no retry ever happens even after raising `maxNumberOfRetries`; we set it explicitly. `Retry-After` is honoured. (b) ContextMatic described the error field as `debugId`, but `CustomError.result` is the raw JSON body, so it's `result.debug_id` (and `details[].issue`). (c) The SDK keeps the last token as a promise; if a token fetch ever rejects, every later call on that client rejects too (verified with a throwaway script: a provider that fails once, then three `getOrder` calls, all three fail with the first error and the provider is never called again). Our wrapper fetches the token itself before each SDK call and rebuilds the client after a non-HTTP failure.
+  - **Corrections from reading the installed source** (`@apimatic/core` 0.10.30), worth telling APIMatic: (a) `retryConfig.maximumRetryWaitTime` defaults to 0 and is the *total* wait budget, so with the defaults no retry ever happens even after raising `maxNumberOfRetries`. `Retry-After` is honoured. (b) ContextMatic described the error field as `debugId`, but `CustomError.result` is the raw JSON body, so it's `result.debug_id` (and `details[].issue`). (c) The SDK keeps the last token as a promise; if a token fetch ever rejects, every later call on that client rejects too (verified with a throwaway script: a provider that fails once, then three `getOrder` calls, all three fail with the first error and the provider is never called again). Our wrapper fetches the token itself before each SDK call and rebuilds the client after a non-HTTP failure. (d) **Retrying declared errors:** the request pipeline runs auth -> retry -> error mapping, so every *declared* error status (for capture: 400, 401, 403, 404, 422, 500) is thrown inside the retry loop and retried like a timeout when `retryOnTimeout` is true (its default). Measured live in sandbox: a `getOrder` 404 took 8.7 s with retries enabled (three extra calls) versus 0.75 s with them off, and a capture 422 took 9.3 s. A declined buyer would wait about 9 s, and the decline would be attempted four times. **Fix (commit `44e6343`):** SDK retries are off (`maxNumberOfRetries: 0`, `retryOnTimeout: false`); `PayPalClient` retries 429, 5xx and network errors itself with the same `PayPal-Request-Id` and `Retry-After`, never 4xx. Re-measured: 404 in 0.78 s, 422 in 0.52 s.
 
 ## Design decisions
 
@@ -57,12 +57,20 @@ Agreed in the session 1 plan review. They refine the brief where it would break 
 7. **Node 22 LTS.** Node 20 reached end of life in April 2026. `engines` allows 20.12 or newer (needed for `process.loadEnvFile`), and Render is pinned to 22 via `.node-version`.
 8. **Strategic risk.** PayPal already ships *Agent Ready* (existing merchants take payments from AI agents) and *Store Sync* (merchant catalogs from platforms like Wix and BigCommerce into AI agents, US and USD only, by request). Our wedge has to be sellers with no platform at all.
 
+Added in session 2, while building Phase 1:
+
+9. **The capture attempt also goes up after any 4xx**, not only after a decline (refines 1). PayPal may answer a repeated `PayPal-Request-Id` with the stored result, so a capture that got `ORDER_NOT_APPROVED` must not reuse its key once the buyer has approved. Network errors and 5xx keep the key, so a retry can't capture twice.
+10. **After a decline, only the buyer captures again.** The order waits in `NEEDS_NEW_FUNDING` until the buyer comes back through `/paypal/return` (or someone calls `POST /api/orders/:id/capture`). `get_order_status` reconciliation and a late `CHECKOUT.ORDER.APPROVED` webhook don't capture, because PayPal still reports the old approval. With the mock, an automatic capture would succeed without the buyer re-approving, and T1c would pass for the wrong reason.
+11. **Retries live in our code, not the SDK** (see ContextMatic correction (d)): the SDK retries every declared 4xx as if it were a timeout.
+12. **`PUBLIC_BASE_URL` falls back to `RENDER_EXTERNAL_URL`**, which Render sets on every web service, so the return URL is right on the first deploy.
+13. **Render plan id `0.5c-512mb`.** The current Blueprint spec lists size-based ids; that is the old "Starter" size (0.5 CPU, 512 MB). Not `free`: free instances sleep and would drop webhooks.
+
 Assumptions (change them if wrong):
 
 - `shipping_preference: NO_SHIPPING`. Fulfilment is pickup or local delivery arranged after payment.
 - Quantity is 1 to 10 per product, after duplicate lines are merged.
 - Stock is checked when an order is created and taken when its capture completes. Taking stock clamps at zero and reports any oversell.
-- `get_order_status` reconciles with PayPal: if PayPal says APPROVED and we haven't captured, it captures. A lost webhook can't strand a buyer who clicked "Pay Now".
+- `get_order_status` reconciles with PayPal: if PayPal says APPROVED and we haven't captured, it captures (except in `NEEDS_NEW_FUNDING`, see decision 10). A lost webhook can't strand a buyer who clicked "Pay Now".
 - Webhook handlers never move an order backwards. A late `CHECKOUT.ORDER.APPROVED` after `COMPLETED` does nothing.
 - `/mcp` has no authentication for now. That's acceptable in sandbox only, and must change before any real money.
 
@@ -80,7 +88,7 @@ Assumptions (change them if wrong):
 `scripts/probe-paypal-mcp.ts` gets a sandbox token with our app's client credentials, then lists tools on both transports, with and without `x-feature-flags: commerce:true`.
 
 - **Auth:** the plain REST token is accepted as `Bearer` on the SSE endpoint, no OAuth dance needed (session 1's open question). That matches PayPal's own AI Toolkit `.mcp.json`.
-- **SSE, no flag:** 46 tools. Orders: `create_order`, `get_order`, `pay_order`. Catalog: `create_product`, `list_products`, `show_product_details`, `update_product`. The rest cover invoices (16), subscriptions and recurring series, disputes, refunds, shipment tracking, `list_transactions` and `get_merchant_insights`.
+- **SSE, no flag:** 46 tools. Orders: `create_order`, `get_order`, `pay_order`. Catalog: `create_product`, `list_products`, `show_product_details`, `update_product`. The rest cover invoices (17 tools), subscriptions and recurring series, disputes, refunds, shipment tracking, `list_transactions` and `get_merchant_insights`.
 - **SSE, with the commerce flag:** the same 46 tools. **`search_product`, `create_cart`, `checkout_cart` are not exposed** for our sandbox app, so the header is not enough on its own. That fits the blog post (gift-card catalog, by request).
 - **Streamable HTTP (`/mcp`):** 404 Not Found on the initialize POST, with or without the flag. Only SSE is live for us.
 - **What it means for the pitch:** PayPal's MCP server gives the *merchant's* agent tools to run the merchant's own PayPal account (create an order, list my products, invoices). hackapal is the other side: it lets a *buyer's* agent shop a seller who has no website or platform, with PayPal approval as the human checkpoint. No architecture change, as design decision 6 expected.
@@ -105,6 +113,30 @@ Assumptions (change them if wrong):
 - Phase 0 on branch `day1-spike`, in small Conventional Commits: MIT license and `.gitignore`; TypeScript/Express scaffold with zod config (sandbox guard), logger and `/health`; the Auntie's Kitchen catalog with pricing in integer cents; the in-memory order store; docs.
 - Verified: typecheck clean, 68 unit tests passing, production build starts and serves `/health`, invalid config refuses to start.
 - Deliberately not done: any PayPal code. Per the brief it waits until the sponsor tools are available (session 2).
+
+### Session 2 (2026-11-01, 12:32 to ~13:10 UTC): sponsor tools, Phase 4, Phase 1, render.yaml
+
+- **Branch:** `claude/pensive-faraday-ina38x` (PR #1 from `day1-spike` had already been merged into `main`). Baim's decisions are recorded under "Handoff to session 2".
+- **Environment:** `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_ENV` present (values not printed); `PAYPAL_WEBHOOK_ID` not set yet (expected).
+- **Sponsor tools:** PayPal skill vendored and read; ContextMatic used for the SDK questions; both logged above with what they changed.
+- **Dependencies:** `@paypal/paypal-server-sdk` 2.5.0 and `@modelcontextprotocol/sdk` 1.32.2 both work with zod 4.6 and TypeScript 7.0. No pin-back needed.
+- **Phase 4:** done in about 3 minutes, result above (P4).
+- **Phase 1 code:** `src/paypal-http.ts`, `src/paypal-auth.ts`, `src/paypal.ts`, `src/orders.ts`, `src/paypal-routes.ts`, `src/api-routes.ts`, `src/pages.ts`, `scripts/money-path.ts`. Tests: 137 passing (68 new: `orders` 25, `paypal` 16, `routes` 12, `paypal-http` 9, `paypal-auth` 6; plus 1 new config test). They cover request ids, retry/backoff, `Retry-After`, the token cache, `debug_id` logging, the verify payload containing the raw body byte for byte, single-flight capture, decline recovery, webhook dedupe and never-backwards.
+- **Live sandbox checks from the container** (no buyer approval needed):
+  - 12:49 UTC, SDK directly: order `4XH687100W6322708` created (status `PAYER_ACTION_REQUIRED`, `payer-action` link on `www.sandbox.paypal.com`, `custom_id` round-trips). The same `PayPal-Request-Id` returned the same order. Capture before approval: 422 `ORDER_NOT_APPROVED`, `debug_id f93639164818b`. Unknown order: 404 `INVALID_RESOURCE_ID`, `debug_id ca53b053ebecf`. One token fetch for all of it.
+  - 12:57 UTC, built server (`node dist/server.js`) over HTTP: `POST /api/orders` created `ord_ac3qt4qygfz4` (PayPal `6U09316128118382V`, $12.00). `/paypal/return` before approval showed "Payment not approved yet" (422 `ORDER_NOT_APPROVED`, `debug_id f809132666479`). `/paypal/cancel` moved it to `CANCELLED`. The webhook without `PAYPAL_WEBHOOK_ID` answered 503. Shutdown was clean.
+  - SDK retry bug found and fixed (ContextMatic correction (d)): PayPal errors went from about 9 s to 0.5-0.8 s.
+- **Phase 3:** `render.yaml` written. Next step needs Baim (Render and PayPal dashboards), see "Handoff to session 3".
+
+## Handoff to session 3
+
+State: Phase 1 code is done and unit-tested. T1a, T1b and T1c need the Render deploy. Phase 2 (MCP) hasn't started.
+
+1. Baim deploys the Blueprint and sets up the sandbox webhook (steps in the session 2 chat and in `README.md` "Deploy to Render").
+2. Check `https://<service>.onrender.com/health`: expect `credentialsConfigured: true` and `webhookConfigured: true`.
+3. T1a + T1b: `npm run money-path -- --base-url https://<service>.onrender.com`. Baim approves as the sandbox **buyer**. Expect `CREATED -> COMPLETED`, a capture id, and `webhook verified: PAYMENT.CAPTURE.COMPLETED` within about 2 minutes.
+4. T1c: the same with `--simulate-decline`. Expect `CREATED -> NEEDS_NEW_FUNDING -> COMPLETED` after Baim approves a second time.
+5. Then Phase 2 (`/mcp`, three tools, `mcp-smoke`), T2a, and T2b with Baim.
 
 ## Handoff to session 2
 

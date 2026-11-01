@@ -22,6 +22,8 @@ const EnvSchema = z.object({
   PAYPAL_CLIENT_ID: z.string().optional(),
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_WEBHOOK_ID: z.string().optional(),
+  SUPABASE_URL: z.url({ protocol: /^https$/, error: 'SUPABASE_URL must be an https URL' }).optional(),
+  SUPABASE_SECRET_KEY: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
 });
@@ -36,6 +38,8 @@ export interface AppConfig {
     clientSecret?: string;
     webhookId?: string;
   };
+  /** Present when both SUPABASE_URL and SUPABASE_SECRET_KEY are set; otherwise orders live in memory. */
+  supabase?: { url: string; secretKey: string };
   telegram?: { botToken: string; chatId: string };
   /** Non-fatal problems worth logging at startup. Never contains secret values. */
   warnings: string[];
@@ -69,6 +73,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (Boolean(e.PAYPAL_CLIENT_ID) !== Boolean(e.PAYPAL_CLIENT_SECRET)) {
     warnings.push('Only one of PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET is set; PayPal calls will fail.');
   }
+  if (Boolean(e.SUPABASE_URL) !== Boolean(e.SUPABASE_SECRET_KEY)) {
+    warnings.push('Supabase needs both SUPABASE_URL and SUPABASE_SECRET_KEY; using the in-memory order store.');
+  }
   if (Boolean(e.TELEGRAM_BOT_TOKEN) !== Boolean(e.TELEGRAM_CHAT_ID)) {
     warnings.push('Telegram needs both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID; seller pings are off.');
   }
@@ -82,6 +89,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       clientSecret: e.PAYPAL_CLIENT_SECRET,
       webhookId: e.PAYPAL_WEBHOOK_ID,
     },
+    supabase:
+      e.SUPABASE_URL && e.SUPABASE_SECRET_KEY ? { url: e.SUPABASE_URL, secretKey: e.SUPABASE_SECRET_KEY } : undefined,
     telegram:
       e.TELEGRAM_BOT_TOKEN && e.TELEGRAM_CHAT_ID
         ? { botToken: e.TELEGRAM_BOT_TOKEN, chatId: e.TELEGRAM_CHAT_ID }

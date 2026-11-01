@@ -12,7 +12,7 @@ Evidence log for the Day 1 risk spike. Every check is **PASS**, **FAIL** or **PE
 | T1c | Simulated `INSTRUMENT_DECLINED` goes to `NEEDS_NEW_FUNDING`, buyer re-approves, order reaches `COMPLETED` | PENDING | |
 | T2a | `mcp-smoke` against local and deployed `/mcp`: tools listed, `create_order` returns a real approval link | PENDING | |
 | T2b | claude.ai connector end to end: "buy 2 boxes of cookies from Auntie's Kitchen", total shown, link handed over, approved, `COMPLETED` confirmed via `get_order_status` | PENDING | |
-| P4 | PayPal sandbox MCP tool list without and with `x-feature-flags: commerce:true` | PENDING | |
+| P4 | PayPal sandbox MCP tool list without and with `x-feature-flags: commerce:true` | **PASS** (probe ran) | Session 2, 12:45 UTC, `npm run probe-paypal-mcp`: a plain client-credentials REST token works as `Bearer` on `https://mcp.sandbox.paypal.com/sse` (server "PayPal MCP Agent 1.0.0"). 46 tools both times; the commerce flag adds nothing; `search_product`, `create_cart`, `checkout_cart` absent. Streamable HTTP `/mcp` answers 404 to an authenticated POST. See "Phase 4 probe result". |
 | S5 | Telegram seller ping on a completed capture (optional) | PENDING | |
 
 ## Sponsor tools used
@@ -74,6 +74,16 @@ Assumptions (change them if wrong):
 - **Commerce tools** ([PayPal blog](https://developer.paypal.com/community/blog/expanding-paypal-mcp-capabilities)): gift cards only for now; the documented header is `x-feature-flags: commerce:true`.
 - **Versions chosen (2026-11-01):** express 5.3, zod 4.6, typescript 7.0 (native compiler), vitest 5.0, tsx 4.23. For Phases 1 and 2: `@paypal/paypal-server-sdk` (2.5.0 is latest) and `@modelcontextprotocol/sdk` (1.32.2 is latest).
 - **Windows:** the lockfile includes the win32-x64 native binaries (esbuild, rolldown, TypeScript 7), so `npm ci` should work on Baim's machine. If it ever complains about a missing native binding, run `npm install` once to repair it.
+
+## Phase 4 probe result (session 2, 2026-11-01 12:45 UTC)
+
+`scripts/probe-paypal-mcp.ts` gets a sandbox token with our app's client credentials, then lists tools on both transports, with and without `x-feature-flags: commerce:true`.
+
+- **Auth:** the plain REST token is accepted as `Bearer` on the SSE endpoint, no OAuth dance needed (session 1's open question). That matches PayPal's own AI Toolkit `.mcp.json`.
+- **SSE, no flag:** 46 tools. Orders: `create_order`, `get_order`, `pay_order`. Catalog: `create_product`, `list_products`, `show_product_details`, `update_product`. The rest cover invoices (16), subscriptions and recurring series, disputes, refunds, shipment tracking, `list_transactions` and `get_merchant_insights`.
+- **SSE, with the commerce flag:** the same 46 tools. **`search_product`, `create_cart`, `checkout_cart` are not exposed** for our sandbox app, so the header is not enough on its own. That fits the blog post (gift-card catalog, by request).
+- **Streamable HTTP (`/mcp`):** 404 Not Found on the initialize POST, with or without the flag. Only SSE is live for us.
+- **What it means for the pitch:** PayPal's MCP server gives the *merchant's* agent tools to run the merchant's own PayPal account (create an order, list my products, invoices). hackapal is the other side: it lets a *buyer's* agent shop a seller who has no website or platform, with PayPal approval as the human checkpoint. No architecture change, as design decision 6 expected.
 
 ## Screenshots to take
 

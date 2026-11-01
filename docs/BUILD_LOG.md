@@ -81,6 +81,19 @@ Assumptions (change them if wrong):
 
 ## Handoff to session 2
 
+### Decisions from Baim (session 2, 2026-11-01, 12:37 UTC)
+
+These override anything below that disagrees with them.
+
+0. **Branch.** `day1-spike` is retired (PR #1 was merged into `main`). Work happens on `claude/pensive-faraday-ina38x`, with a new draft PR from it.
+1. **Missing tools don't block work.** Only the APIMatic plugin is a sponsor-prize requirement; the PayPal skill is not. If a tool is missing: tell Baim in one line, log it here, and continue with PayPal's REST docs.
+2. **The PayPal skill is vendored** so every session has it: `skills/paypal-best-practices` (with `references/`) from `github.com/paypal/AI-Toolkit` is copied into `.claude/skills/paypal-best-practices/`, with its Apache-2.0 license and a source note. Read it and ask ContextMatic the SDK questions, and log both, before writing the Orders and webhook code.
+3. **Order of work:** Phase 4 probe (15 minutes max; try the client-credentials token as `Bearer` first, which is what PayPal's own AI Toolkit `.mcp.json` does) -> Phase 1 code and tests -> Phase 3 `render.yaml`, then stop and walk Baim through the Render deploy and webhook setup -> T1a, T1b and T1c against the Render URL -> Phase 2 -> T2a -> T2b with Baim. Reason: the cloud container isn't reachable from Baim's browser, so return URLs and webhooks need the public URL anyway.
+4. **Dependency fights:** if the MCP SDK or the PayPal SDK fights zod 4 or TypeScript 7, pin back (zod 3 or TypeScript 5.x) instead of debugging, and log it.
+5. **Timebox:** if one blocker takes more than 30 minutes, stop, log it and tell Baim.
+
+### Original handoff (session 1)
+
 Paste this into the new session:
 
 > Continue the hackapal Day 1 spike on branch `day1-spike` (there is a draft PR from it). Read `CLAUDE.md` and the "Handoff to session 2" section of `docs/BUILD_LOG.md` first. Phase 0 is done. Check that the paypal-best-practices skill and the APIMatic ContextMatic connector are available and that the `PAYPAL_*` env vars are set (don't print them). Use both tools before writing PayPal code and log it in the build log. Then run the Phase 4 probe, then Phases 1 and 2. Stop when you need me to approve a sandbox payment.

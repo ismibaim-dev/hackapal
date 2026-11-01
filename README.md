@@ -100,7 +100,7 @@ docs/         build log and evidence
 
 ## Deploy to Render
 
-`render.yaml` is a Blueprint for one Node web service (Singapore, 0.5 CPU / 512 MB, health check `/health`). In the Render dashboard choose **New > Blueprint**, pick this repo and branch, and enter the PayPal sandbox credentials when asked. After the first deploy, create a sandbox webhook pointing at `https://<service>.onrender.com/webhooks/paypal` and put its ID in `PAYPAL_WEBHOOK_ID`. The build log has the step-by-step version.
+`render.yaml` is a Blueprint for one Node web service (Singapore, free plan for now, health check `/health`). The free plan sleeps after about 15 minutes idle and loses the in-memory orders on restart; see design decision 14 in the build log. In the Render dashboard choose **New > Blueprint**, pick this repo and branch, and enter the PayPal sandbox credentials when asked. After the first deploy, create a sandbox webhook pointing at `https://<service>.onrender.com/webhooks/paypal` and put its ID in `PAYPAL_WEBHOOK_ID`. The build log has the step-by-step version.
 
 ## Judge quickstart
 

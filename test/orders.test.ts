@@ -227,6 +227,16 @@ describe('OrderService webhooks', () => {
     expect(s.completed).toHaveLength(1);
   });
 
+  it('stays idempotent when the dedupe memory is gone (same capture, new event id)', async () => {
+    const s = setup();
+    const order = await created(s);
+    await s.service.handleWebhookEvent(captureCompleted(order, 'WH-C-FIRST'));
+    await s.service.handleWebhookEvent(captureCompleted(order, 'WH-C-AGAIN'));
+    expect(s.stock()).toBe(22);
+    await Promise.resolve();
+    expect(s.completed).toHaveLength(1);
+  });
+
   it('completes from PAYMENT.CAPTURE.COMPLETED alone (buyer closed the tab)', async () => {
     const s = setup();
     const order = await created(s);

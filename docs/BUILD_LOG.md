@@ -63,7 +63,13 @@ Added in session 2, while building Phase 1:
 10. **After a decline, only the buyer captures again.** The order waits in `NEEDS_NEW_FUNDING` until the buyer comes back through `/paypal/return` (or someone calls `POST /api/orders/:id/capture`). `get_order_status` reconciliation and a late `CHECKOUT.ORDER.APPROVED` webhook don't capture, because PayPal still reports the old approval. With the mock, an automatic capture would succeed without the buyer re-approving, and T1c would pass for the wrong reason.
 11. **Retries live in our code, not the SDK** (see ContextMatic correction (d)): the SDK retries every declared 4xx as if it were a timeout.
 12. **`PUBLIC_BASE_URL` falls back to `RENDER_EXTERNAL_URL`**, which Render sets on every web service, so the return URL is right on the first deploy.
-13. **Render plan id `0.5c-512mb`.** The current Blueprint spec lists size-based ids; that is the old "Starter" size (0.5 CPU, 512 MB). Not `free`: free instances sleep and would drop webhooks.
+13. *(Superseded by 14 for now.)* **Render plan id `0.5c-512mb`.** The current Blueprint spec lists size-based ids; that is the old "Starter" size (0.5 CPU, 512 MB).
+14. **We're on Render's free plan for now** (Baim, 2026-11-01: the paid size made Render ask for a card). What that means:
+    - The service sleeps after about 15 minutes without inbound traffic. The first request after that takes about a minute while it wakes. Render may also restart a free service at any time.
+    - A restart or sleep wipes the in-memory order store (and the webhook dedupe memory). Orders created before it are gone, and their late webhooks are logged as "unknown order" and ignored.
+    - **During tests, approve payments within a few minutes** of creating the order, and don't push to the deployed branch mid-test (auto-deploy restarts the service).
+    - A PayPal webhook that hits a sleeping service waits for the wake-up. If PayPal gives up first, it redelivers later. That's safe: events are deduped by id, and status changes are idempotent (see "Webhook retries" in the session 2 follow-up).
+    - **Before judging (Dec 2 to 16):** move the order store to Supabase, and either add an uptime pinger on `/health` or switch to the paid size with the Render hackathon credit (`plan: 0.5c-512mb`, the old "starter"). A pinger that keeps the service awake 24/7 uses about 720 to 744 of the workspace's 750 free hours a month, so it only works for this one service. If the hours run out with no card on file, Render suspends every free service for the rest of the month.
 
 Assumptions (change them if wrong):
 
@@ -127,6 +133,17 @@ Assumptions (change them if wrong):
   - 12:57 UTC, built server (`node dist/server.js`) over HTTP: `POST /api/orders` created `ord_ac3qt4qygfz4` (PayPal `6U09316128118382V`, $12.00). `/paypal/return` before approval showed "Payment not approved yet" (422 `ORDER_NOT_APPROVED`, `debug_id f809132666479`). `/paypal/cancel` moved it to `CANCELLED`. The webhook without `PAYPAL_WEBHOOK_ID` answered 503. Shutdown was clean.
   - SDK retry bug found and fixed (ContextMatic correction (d)): PayPal errors went from about 9 s to 0.5-0.8 s.
 - **Phase 3:** `render.yaml` written. Next step needs Baim (Render and PayPal dashboards), see "Handoff to session 3".
+
+### Session 2 follow-up (2026-11-01, after PR #2 merged): free plan, `/health`, webhook retries
+
+- **Branch** restarted from the merged `main` (`26d8460`), same name. `render.yaml` switched to `plan: free` (`64ca87b`); everything else unchanged. Render's docs list no free-plan limits on the region, health check, build/start commands or env vars. See design decision 14.
+- **`/health` after a cold start:** the handler is synchronous and does no I/O (no PayPal, no store). Measured from spawning `node dist/server.js` to the first `/health` 200: 726, 349 and 372 ms over three runs. The first response took 8-20 ms, later ones about 4 ms. Importing the PayPal SDK (about 250 ms) is the largest share of startup. The roughly one-minute wake on the free plan is Render starting the instance, not the app. New test: `/health` answers while every PayPal call hangs.
+- **Webhook retries:**
+  1. PayPal redelivers only when it doesn't get a 2xx. We answer 503 when verification is unavailable or `PAYPAL_WEBHOOK_ID` is unset, and 400 for a bad signature or JSON. The event id is remembered only after verification, so a redelivery after a 503 is processed normally.
+  2. Dedupe by event id is implemented, not just planned (`OrderService.handleWebhookEvent`, in memory, last 5000 ids). The check and the insert happen with no `await` in between, so two concurrent deliveries of one event can't both get through.
+  3. Even without that memory (a free-plan restart), the handlers are idempotent: statuses never move backwards, stock and the seller ping happen only on the move to `COMPLETED`, and capture is single-flight with a stable request id.
+  4. Hardened: the verify call's `PayPal-Request-Id` was `verify-<transmission_id>`, a value the sender chooses. It is now random per delivery, so a stored verification result can never be replayed for another delivery.
+  - New tests: a redelivered event answered 200 twice but processed once; the same capture under a new event id takes stock once; a fresh verify request id per delivery. 141 tests passing.
 
 ## Handoff to session 3
 

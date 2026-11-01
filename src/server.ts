@@ -1,6 +1,10 @@
-import { createApp } from './app.js';
+import { createApp, type AppDeps } from './app.js';
+import { createCatalog } from './catalog.js';
 import { ConfigError, hasPayPalCredentials, loadConfig, loadDotEnv, type AppConfig } from './config.js';
 import { log } from './log.js';
+import { OrderService } from './orders.js';
+import { PayPalClient } from './paypal.js';
+import { InMemoryOrderStore } from './store.js';
 
 loadDotEnv();
 
@@ -15,7 +19,23 @@ try {
 }
 for (const warning of config.warnings) log.warn(warning);
 
-const app = createApp({ config });
+const deps: AppDeps = { config };
+if (hasPayPalCredentials(config)) {
+  const paypal = new PayPalClient({ clientId: config.paypal.clientId!, clientSecret: config.paypal.clientSecret! });
+  deps.paypal = paypal;
+  deps.orders = new OrderService({
+    catalog: createCatalog(),
+    store: new InMemoryOrderStore(),
+    paypal,
+    publicBaseUrl: config.publicBaseUrl,
+    allowSimulatedDecline: config.paypal.env === 'sandbox',
+  });
+} else {
+  log.warn('PayPal credentials missing: order, PayPal and webhook routes answer 503');
+}
+if (!config.paypal.webhookId) log.warn('PAYPAL_WEBHOOK_ID not set: webhooks will be refused (503)');
+
+const app = createApp(deps);
 
 const server = app.listen(config.port, (err?: Error) => {
   if (err) {

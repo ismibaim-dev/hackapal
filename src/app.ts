@@ -2,6 +2,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { apiRoutes } from './api-routes.js';
 import { hasPayPalCredentials, type AppConfig } from './config.js';
 import { log } from './log.js';
+import { mcpRoutes } from './mcp.js';
 import type { OrderService } from './orders.js';
 import type { PayPalGateway } from './paypal.js';
 import { PayPalHttpError } from './paypal-http.js';
@@ -41,8 +42,9 @@ export function createApp({ config, orders, paypal }: AppDeps): Express {
   if (orders && paypal) {
     app.use(paypalRoutes({ orders, paypal, webhookId: config.paypal.webhookId }));
     app.use('/api', apiRoutes({ orders }));
+    app.use(mcpRoutes({ orders }));
   } else {
-    app.use(['/paypal', '/webhooks', '/api'], (_req, res) => {
+    app.use(['/paypal', '/webhooks', '/api', '/mcp'], (_req, res) => {
       res.status(503).json({ error: 'paypal_not_configured' });
     });
   }

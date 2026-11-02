@@ -176,8 +176,12 @@ Assumptions (change them if wrong):
   - Taking 5 of the remaining 1 for another order clamped at 0 with `short_by: 4`.
   - The publishable key is refused on `rpc/take_stock` and on `stock` (`42501`).
   - The security advisor reports only the intended INFO `rls_enabled_no_policy`, one per table.
+- **Live on Render (commit `0f931f6`, 03:17 UTC):**
+  - `/health` reported `"stockStore": "supabase"`.
+  - The server seeded `public.stock` with 24, 15 and 10, and `list_products` over the deployed MCP endpoint returned those numbers.
+  - Paid order `ord_zp6ht17jmjzp` (PayPal, 2 x Chocolate chip cookies, $12.00, approved by Baim in sandbox) reached `COMPLETED` at 03:19:36, capture `0MM61912RS3958306`. In the same instant, cookies stock went 24 -> 22 with exactly one `stock_movements` row (quantity 2, `short_by` 0).
+  - The verified `PAYMENT.CAPTURE.COMPLETED` webhook arrived 21 s later (03:19:57). Stock stayed at 22 and there was still one movement, so the second completion path did not take stock again.
 - **Not covered yet:**
-  - A real paid order taking stock on Render needs a sandbox approval.
   - The live Supabase contract tests need `TEST_SUPABASE_URL` and `TEST_SUPABASE_SECRET_KEY`.
   - Order completion and the stock take are separate statements, not one transaction. If the process dies between them, that sale's stock isn't taken; `stock take failed` or a missing movement row shows it.
 

@@ -2,7 +2,31 @@
 
 **An agent-ready micro-store:** a small seller with no website gets a shop that AI assistants can browse and buy from over MCP, with PayPal handling the money.
 
-> Built for the PayPal AI Hackathon on Devpost. **Status: Day 1 risk spike in progress.** Results and evidence live in [docs/BUILD_LOG.md](docs/BUILD_LOG.md).
+> Built for the PayPal AI Hackathon on Devpost. **Live on PayPal sandbox** at https://hackapal.onrender.com. Every end-to-end check passes, with evidence (order ids, capture ids, verified webhooks) in [docs/BUILD_LOG.md](docs/BUILD_LOG.md).
+
+## Judge quickstart
+
+The demo runs on PayPal **sandbox**: no real money moves. It takes about five minutes.
+
+1. **Wake the shop.** It's on free hosting that sleeps when idle. Open https://hackapal.onrender.com/health and wait for `"status":"ok"`; the first load can take up to a minute.
+2. **Connect Claude to the shop.** In claude.ai go to **Settings > Connectors > Add custom connector**. Use the name `Auntie's Kitchen` and the URL `https://hackapal.onrender.com/mcp`, with no authentication. Start a new chat and make sure the connector is switched on for it.
+3. **Shop by talking.** Try "What does Auntie's Kitchen sell?", then "Buy 2 boxes of chocolate chip cookies." Claude reads the catalog, confirms the items and the $12.00 total with you, creates the order and hands you a PayPal link.
+4. **Pay as the buyer.** Open the link and log in with the sandbox buyer account: _[credentials are in the Devpost submission's testing instructions]_. Click **Pay Now**. You land on "Payment complete, you can go back to your assistant."
+5. **Ask Claude "Is it paid?"** It checks with `get_order_status` and only says paid once the status is `COMPLETED`.
+
+**What to look for:**
+- **The model can't set prices.** `create_order` takes product ids and quantities only, and the server prices the cart from its own catalog. Try asking Claude to give you a discount.
+- **Only the human pays.** Claude hands over a link and never claims payment until PayPal confirms the capture.
+- **Stock counts down** only after payment, exactly once per order, even when PayPal's webhook and the return page both report the payment.
+- **The seller gets a Telegram ping** for each paid order, and a declined card is recovered by sending the buyer back to PayPal to choose another way to pay. Both are shown in the demo video, because they happen on the seller's phone and through sandbox negative testing.
+
+**Without claude.ai:** any MCP client that speaks Streamable HTTP works. For example, `npx @modelcontextprotocol/inspector` with transport "Streamable HTTP" and the URL above, or `npm run mcp-smoke -- https://hackapal.onrender.com/mcp` from a clone of this repo.
+
+**Limits you might hit:**
+- `/mcp` is public but rate-limited: 120 requests a minute per IP, and at most 20 new orders per IP (60 in total) per 10 minutes. Wait a few minutes if Claude reports that the shop is busy.
+- An unpaid order simply expires; nothing is charged.
+
+**Demo video:** _[link to be added]_
 
 ## How it works
 
@@ -12,7 +36,33 @@
 4. The server captures the payment, either on PayPal's return redirect or from the verified `CHECKOUT.ORDER.APPROVED` webhook if the buyer closed the tab early.
 5. The seller gets a ping, and the assistant checks `get_order_status`. It may only say "paid" once the status is `COMPLETED`.
 
-Built so far: the demo shop "Auntie's Kitchen", server-side pricing in integer cents, the order store, and the PayPal money path (Orders v2 create and capture, return and cancel pages, verified webhooks, decline recovery). The MCP tools are next (see the status board in the build log).
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Buyer
+    participant AI as AI assistant (Claude)
+    participant Shop as hackapal /mcp
+    participant PayPal as PayPal (sandbox)
+    participant Seller as Seller (Telegram)
+    Buyer->>AI: "Buy 2 boxes of cookies"
+    AI->>Shop: list_products
+    Shop-->>AI: products, prices, stock
+    AI->>Buyer: confirms items and $12.00
+    AI->>Shop: create_order (items only, no prices)
+    Shop->>PayPal: Orders v2 create (priced by the server)
+    PayPal-->>Shop: approval link
+    Shop-->>AI: order id, total, approval link
+    AI->>Buyer: "Open this link to pay"
+    Buyer->>PayPal: approves (only the human can pay)
+    PayPal->>Shop: return redirect and signed webhooks
+    Shop->>PayPal: capture
+    Shop->>Seller: "New order! 2 x cookies, $12.00"
+    AI->>Shop: get_order_status
+    Shop-->>AI: COMPLETED
+    AI->>Buyer: "Paid"
+```
+
+What's built: the demo shop "Auntie's Kitchen"; server-side pricing in integer cents; the PayPal money path (Orders v2 create and capture, return and cancel pages, verified webhooks, decline recovery); the MCP endpoint with three tools; orders and stock persisted in Supabase; an API key on the internal API with rate limits on the public storefront; and the Telegram seller ping.
 
 ## Run locally
 
@@ -108,16 +158,7 @@ docs/         build log and evidence
 
 ## Deploy to Render
 
-`render.yaml` is a Blueprint for one Node web service (Singapore, free plan for now, health check `/health`). The free plan sleeps after about 15 minutes idle and loses the in-memory orders on restart; see design decision 14 in the build log. In the Render dashboard choose **New > Blueprint**, pick this repo and branch, and enter the PayPal sandbox credentials when asked. After the first deploy, create a sandbox webhook pointing at `https://<service>.onrender.com/webhooks/paypal` and put its ID in `PAYPAL_WEBHOOK_ID`. The build log has the step-by-step version.
-
-## Judge quickstart
-
-_Placeholder: this gets filled in once the deployed demo and the claude.ai connector are verified._
-
-- MCP endpoint: `https://<service>.onrender.com/mcp` (to be confirmed)
-- Try it: add that URL as a custom connector in claude.ai, then say "buy 2 boxes of cookies from Auntie's Kitchen".
-- Sandbox buyer login: to be shared on the Devpost page.
-- Demo video: to be added.
+`render.yaml` is a Blueprint for one Node web service (Singapore, free plan for now, health check `/health`). The free plan sleeps after about 15 minutes idle and takes about a minute to wake; orders and stock survive because they live in Supabase. See design decision 14 in the build log. In the Render dashboard choose **New > Blueprint**, pick this repo and branch, and enter the PayPal sandbox credentials when asked. After the first deploy, create a sandbox webhook pointing at `https://<service>.onrender.com/webhooks/paypal` and put its ID in `PAYPAL_WEBHOOK_ID`. The build log has the step-by-step version.
 
 ## License
 

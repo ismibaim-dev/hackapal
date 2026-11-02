@@ -7,6 +7,7 @@ import { PayPalClient } from './paypal.js';
 import { InMemoryOrderStore, type OrderStore } from './store.js';
 import { CatalogStockStore, SupabaseStockStore, type StockStore } from './stock.js';
 import { createSupabaseServerClient, SupabaseOrderStore } from './supabase-store.js';
+import { TelegramNotifier } from './telegram.js';
 
 loadDotEnv();
 
@@ -35,6 +36,9 @@ if (hasPayPalCredentials(config)) {
     store,
     stock,
     paypal,
+    ...(config.telegram
+      ? { notifier: new TelegramNotifier({ ...config.telegram, shopName: catalog.shop.name }) }
+      : {}),
     publicBaseUrl: config.publicBaseUrl,
     allowSimulatedDecline: config.paypal.env === 'sandbox',
   });

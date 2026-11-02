@@ -81,6 +81,8 @@ src/
   store.ts    order store interface + in-memory implementation
   supabase-store.ts  the same store on Supabase Postgres (public.orders)
   stock.ts    live stock levels: in memory, or Supabase (taken once per order line)
+  telegram.ts seller ping on Telegram when an order is paid (optional)
+  auth.ts, rate-limit.ts  API key for /api, limits for the public /mcp
   orders.ts   order service: create, capture (single-flight), webhooks, status
   paypal.ts   PayPal Orders v2 via @paypal/paypal-server-sdk + webhook verification
   paypal-auth.ts  OAuth token cache shared by the SDK and fetch calls

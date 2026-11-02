@@ -55,7 +55,12 @@ export type PricingResult = { ok: true; quote: Quote } | { ok: false; issues: Pr
  * combined first, then every problem is collected so an agent can fix them in one go.
  * Read-only: stock is checked here and taken later, when a capture completes.
  */
-export function priceCart(catalog: Catalog, input: CartInput): PricingResult {
+export function priceCart(
+  catalog: Catalog,
+  input: CartInput,
+  /** Live stock per product id (from a StockStore). Without it, the catalog's own stock is used. */
+  stockLevels?: ReadonlyMap<string, number>,
+): PricingResult {
   const issues: PricingIssue[] = [];
   const merged = new Map<string, { quantity: number; lines: number }>();
 
@@ -91,16 +96,17 @@ export function priceCart(catalog: Catalog, input: CartInput): PricingResult {
       continue;
     }
 
-    if (quantity > product.stock) {
+    const available = stockLevels ? (stockLevels.get(productId) ?? 0) : product.stock;
+    if (quantity > available) {
       issues.push({
         code: 'OUT_OF_STOCK',
         productId,
         requested: quantity,
-        available: product.stock,
+        available,
         message:
-          product.stock === 0
+          available === 0
             ? `"${product.name}" is sold out.`
-            : `Only ${product.stock} left of "${product.name}" (asked for ${quantity}).`,
+            : `Only ${available} left of "${product.name}" (asked for ${quantity}).`,
       });
       continue;
     }

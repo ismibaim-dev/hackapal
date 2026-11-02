@@ -5,7 +5,8 @@ import { log } from './log.js';
 import { OrderService } from './orders.js';
 import { PayPalClient } from './paypal.js';
 import { InMemoryOrderStore, type OrderStore } from './store.js';
-import { SupabaseOrderStore } from './supabase-store.js';
+import { CatalogStockStore, SupabaseStockStore, type StockStore } from './stock.js';
+import { createSupabaseServerClient, SupabaseOrderStore } from './supabase-store.js';
 
 loadDotEnv();
 
@@ -24,13 +25,15 @@ const deps: AppDeps = { config };
 if (hasPayPalCredentials(config)) {
   const paypal = new PayPalClient({ clientId: config.paypal.clientId!, clientSecret: config.paypal.clientSecret! });
   deps.paypal = paypal;
-  const store: OrderStore = config.supabase
-    ? new SupabaseOrderStore(config.supabase)
-    : new InMemoryOrderStore();
-  if (!config.supabase) log.warn('SUPABASE_URL/SUPABASE_SECRET_KEY not set: orders are kept in memory and lost on restart');
+  const catalog = createCatalog();
+  const db = config.supabase ? createSupabaseServerClient(config.supabase.url, config.supabase.secretKey) : undefined;
+  const store: OrderStore = db ? new SupabaseOrderStore({ ...config.supabase!, client: db }) : new InMemoryOrderStore();
+  const stock: StockStore = db ? new SupabaseStockStore(db, catalog) : new CatalogStockStore(catalog);
+  if (!db) log.warn('SUPABASE_URL/SUPABASE_SECRET_KEY not set: orders and stock are kept in memory and lost on restart');
   deps.orders = new OrderService({
-    catalog: createCatalog(),
+    catalog,
     store,
+    stock,
     paypal,
     publicBaseUrl: config.publicBaseUrl,
     allowSimulatedDecline: config.paypal.env === 'sandbox',

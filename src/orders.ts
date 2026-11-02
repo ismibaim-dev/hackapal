@@ -1,9 +1,10 @@
-import type { Catalog } from './catalog.js';
+import type { Catalog, Product } from './catalog.js';
 import { log } from './log.js';
 import { formatUsd } from './money.js';
 import type { PayPalGateway, PayPalOrderSummary } from './paypal.js';
 import { PayPalHttpError } from './paypal-http.js';
 import { priceCart, type CartInput, type PricingIssue, type Quote } from './pricing.js';
+import { CatalogStockStore, type StockStore } from './stock.js';
 import { FINAL_STATUSES, newOrderId, type Order, type OrderStatus, type OrderStore } from './store.js';
 
 /**
@@ -73,6 +74,8 @@ export interface SellerNotifier {
 export interface OrderServiceOptions {
   catalog: Catalog;
   store: OrderStore;
+  /** Live stock. Defaults to in-memory stock on the catalog. */
+  stock?: StockStore;
   paypal: PayPalGateway;
   publicBaseUrl: string;
   /** Whether simulate_decline may be honoured (sandbox only). */
@@ -104,6 +107,7 @@ export interface WebhookRecord {
 
 export class OrderService {
   readonly #catalog: Catalog;
+  readonly #stock: StockStore;
   readonly #store: OrderStore;
   readonly #paypal: PayPalGateway;
   readonly #baseUrl: string;
@@ -117,6 +121,7 @@ export class OrderService {
 
   constructor(options: OrderServiceOptions) {
     this.#catalog = options.catalog;
+    this.#stock = options.stock ?? new CatalogStockStore(options.catalog);
     this.#store = options.store;
     this.#paypal = options.paypal;
     this.#baseUrl = options.publicBaseUrl;
@@ -128,8 +133,14 @@ export class OrderService {
     return this.#catalog;
   }
 
+  /** Catalog products with live stock levels (for list_products). */
+  async listProducts(): Promise<Product[]> {
+    const levels = await this.#stock.levels();
+    return this.#catalog.listProducts().map((p) => ({ ...p, stock: levels.get(p.id) ?? 0 }));
+  }
+
   async createOrder(input: CartInput, options: { simulateDecline?: boolean } = {}): Promise<CreateOrderResult> {
-    const priced = priceCart(this.#catalog, input);
+    const priced = priceCart(this.#catalog, input, await this.#stock.levels());
     if (!priced.ok) return priced;
     const { quote } = priced;
 
@@ -388,11 +399,18 @@ export class OrderService {
     const result = await this.#transition(orderId, 'COMPLETED', { captureId });
     if (!result.changed) return result;
     for (const item of result.order.items) {
-      const { remaining, shortBy } = this.#catalog.takeStock(item.productId, item.quantity);
-      if (shortBy > 0) {
-        log.warn('oversold', { order_id: orderId, product_id: item.productId, short_by: shortBy });
-      } else {
-        log.info('stock taken', { order_id: orderId, product_id: item.productId, quantity: item.quantity, remaining });
+      try {
+        const { remaining, shortBy, applied } = await this.#stock.take(orderId, item.productId, item.quantity);
+        if (!applied) {
+          log.info('stock already taken for this order line', { order_id: orderId, product_id: item.productId });
+        } else if (shortBy > 0) {
+          log.warn('oversold', { order_id: orderId, product_id: item.productId, short_by: shortBy });
+        } else {
+          log.info('stock taken', { order_id: orderId, product_id: item.productId, quantity: item.quantity, remaining });
+        }
+      } catch (err) {
+        // The money has moved; a stock failure must not undo the order. Log loudly to fix by hand.
+        log.error('stock take failed', { order_id: orderId, product_id: item.productId, quantity: item.quantity, err });
       }
     }
     log.info('order completed', { order_id: orderId, capture_id: captureId, total: formatUsd(result.order.totalCents) });

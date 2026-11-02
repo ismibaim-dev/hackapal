@@ -51,9 +51,16 @@ export function createMcpServer(orders: OrderService): McpServer {
     },
     async () => {
       const shop = orders.catalog.shop;
+      let products;
+      try {
+        products = await orders.listProducts();
+      } catch (err) {
+        log.error('mcp list_products failed', { err });
+        return toolError("The shop can't read its stock right now. Try again shortly.");
+      }
       return json({
         shop: { name: shop.name, description: shop.description, fulfilment: shop.fulfilment, currency: shop.currency },
-        products: orders.catalog.listProducts().map((p) => ({
+        products: products.map((p) => ({
           product_id: p.id,
           name: p.name,
           description: p.description,

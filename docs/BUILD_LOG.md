@@ -156,6 +156,31 @@ Assumptions (change them if wrong):
   - **Restart survival:** no traffic for 17 minutes, so the free instance slept. At 02:57 the wake-up request took 22.8 s and `/health` showed `uptimeSeconds: 13`, a fresh process. `ord_d4e56g128jy0` was still there.
 - **Still in memory:** product stock (resets to the catalog values on restart) and the webhook dedupe set (safe because status changes are idempotent). The Supabase contract tests in `test/store-contract.test.ts` have not been run against the live project yet; they need `TEST_SUPABASE_URL` and `TEST_SUPABASE_SECRET_KEY` in the environment.
 
+### Stock in Supabase (2026-11-02)
+
+- **Why:** stock lived in memory, so every free-plan sleep or restart reset it to the catalog numbers, which allowed overselling.
+- **Schema:** `supabase/migrations/20261102000000_stock.sql`, applied to project `hackapal`.
+  - `public.stock`: one row per product id, `stock >= 0`.
+  - `public.stock_movements`: primary key `(order_id, product_id)`, recording each sale with its `short_by`.
+  - `public.take_stock(order_id, product_id, quantity)`: locks the stock row, inserts the movement (`on conflict do nothing`), then decrements, clamped at zero. A repeated call for the same order line changes nothing (`applied = false`), so a redelivered webhook, a second code path or a restart part-way through can't take twice.
+  - Execute is granted to `service_role` only. Both tables have RLS on, no policies and no grants for `anon`/`authenticated`.
+- **Code:**
+  - Prices and product definitions stay in `src/catalog.ts`. Only the count moved.
+  - `StockStore` has two implementations: `CatalogStockStore` (in memory, the fallback) and `SupabaseStockStore`. The Supabase one seeds missing catalog products from their initial stock with `insert ... on conflict do nothing`, so a live level is never overwritten.
+  - `priceCart` checks against the live levels, `list_products` shows them, and stock is taken per order line when a capture completes.
+  - A failed stock take is logged as `stock take failed` but never undoes a paid order.
+  - `/health` reports `stockStore`.
+- **Live SQL checks** (03:13 UTC, throwaway product `test-verify-0211`, removed afterwards):
+  - First take of 2 from 3 left 1 (`applied`).
+  - The same order line again changed nothing (`applied: false`).
+  - Taking 5 of the remaining 1 for another order clamped at 0 with `short_by: 4`.
+  - The publishable key is refused on `rpc/take_stock` and on `stock` (`42501`).
+  - The security advisor reports only the intended INFO `rls_enabled_no_policy`, one per table.
+- **Not covered yet:**
+  - A real paid order taking stock on Render needs a sandbox approval.
+  - The live Supabase contract tests need `TEST_SUPABASE_URL` and `TEST_SUPABASE_SECRET_KEY`.
+  - Order completion and the stock take are separate statements, not one transaction. If the process dies between them, that sale's stock isn't taken; `stock take failed` or a missing movement row shows it.
+
 ## Handoff to session 3
 
 State: Phase 1 code is done and unit-tested. T1a, T1b and T1c need the Render deploy. Phase 2 (MCP) hasn't started.

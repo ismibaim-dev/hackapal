@@ -37,6 +37,7 @@ export function createApp({ config, orders, paypal }: AppDeps): Express {
         webhookConfigured: Boolean(config.paypal.webhookId),
       },
       orderStore: config.supabase ? 'supabase' : 'memory',
+      stockStore: config.supabase ? 'supabase' : 'memory',
     });
   });
 

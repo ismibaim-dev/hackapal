@@ -59,6 +59,13 @@ function toOrder(row: OrderRow): Order {
   };
 }
 
+/** One server-side client per process, shared by the order and stock stores. */
+export function createSupabaseServerClient(url: string, secretKey: string): SupabaseClient {
+  return createClient(url, secretKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+}
+
 export interface SupabaseOrderStoreOptions {
   url: string;
   secretKey: string;
@@ -73,10 +80,7 @@ export class SupabaseOrderStore implements OrderStore {
 
   constructor(options: SupabaseOrderStoreOptions) {
     this.#db =
-      options.client ??
-      createClient(options.url, options.secretKey, {
-        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-      });
+      options.client ?? createSupabaseServerClient(options.url, options.secretKey);
     this.#now = options.now ?? (() => new Date());
   }
 

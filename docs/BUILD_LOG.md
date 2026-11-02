@@ -13,7 +13,7 @@ Evidence log for the Day 1 risk spike. Every check is **PASS**, **FAIL** or **PE
 | T2a | `mcp-smoke` against local and deployed `/mcp`: tools listed, `create_order` returns a real approval link | **PASS** | Session 2. Local (~14:10 UTC, built server, real sandbox): `ord_dsewwn9nqznp` / PayPal `7HW025580S139021M`. Deployed (14:14 UTC, `https://hackapal.onrender.com/mcp`, commit `8edadd0`): tools `list_products, create_order, get_order_status`; `create_order` made `ord_tqhy1bqgt2c5` / PayPal `04S77614CV356142N`, $12.00, real `www.sandbox.paypal.com` approval link; `get_order_status` = `CREATED`. |
 | T2b | claude.ai connector end to end: "buy 2 boxes of cookies from Auntie's Kitchen", total shown, link handed over, approved, `COMPLETED` confirmed via `get_order_status` | **PASS** | Session 2, 14:18 UTC, Baim in claude.ai with the custom connector `https://hackapal.onrender.com/mcp`: order `ord_0g3dfbjp6ygs` / PayPal `41555192XT0984904`, 2 x Chocolate chip cookies, $12.00, created 14:17:58, `COMPLETED` 14:18:12, capture `0XA58144BN509850X`. Server side verified from `/api/orders` (both webhooks verified: `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`). The chat itself (tool calls, total, link, confirmation) is evidenced by Baim's screenshots. |
 | P4 | PayPal sandbox MCP tool list without and with `x-feature-flags: commerce:true` | **PASS** (probe ran) | Session 2, 12:45 UTC, `npm run probe-paypal-mcp`: a plain client-credentials REST token works as `Bearer` on `https://mcp.sandbox.paypal.com/sse` (server "PayPal MCP Agent 1.0.0"). 46 tools both times; the commerce flag adds nothing; `search_product`, `create_cart`, `checkout_cart` absent. Streamable HTTP `/mcp` answers 404 to an authenticated POST. See "Phase 4 probe result". |
-| S5 | Telegram seller ping on a completed capture (optional) | PENDING | |
+| S5 | Telegram seller ping on a completed capture (optional) | PENDING | Code and tests done (2026-11-02, `src/telegram.ts`). Waiting for a bot token and chat id on Render, then one paid sandbox order. |
 
 ## Sponsor tools used
 
@@ -191,6 +191,22 @@ Assumptions (change them if wrong):
 - **Not covered yet:**
   - The live Supabase contract tests need `TEST_SUPABASE_URL` and `TEST_SUPABASE_SECRET_KEY`.
   - Order completion and the stock take are separate statements, not one transaction. If the process dies between them, that sale's stock isn't taken; `stock take failed` or a missing movement row shows it.
+
+### API key and rate limits live (2026-11-02, 03:27-03:30 UTC)
+
+- Render commit `8579e13` (PR #8).
+- Before Render picked up `API_KEY`, `/api` answered 503 `api_disabled`, so it fails closed.
+- After the restart that picked it up, `/health` showed `apiKeyConfigured: true` and `/api/orders/...` without a key answered 401.
+- `mcp-smoke` without any key still worked: tools listed, and `create_order` made `ord_xn154qv0bqeq`. So the claude.ai path is unaffected.
+- A correct key wasn't tested live (this session doesn't hold it); the unit tests cover it.
+
+### Telegram seller ping (2026-11-02)
+
+- `src/telegram.ts`: `TelegramNotifier` implements the existing `SellerNotifier`. `OrderService` calls it once per order, on the move to `COMPLETED`, as fire-and-forget, so a Telegram outage never affects the payment.
+- It sends Bot API `sendMessage` as plain text (no `parse_mode`), e.g. "New order for Auntie's Kitchen! 2 x Chocolate chip cookies, $12.00, paid via PayPal." plus the order and capture ids.
+- It retries 429 (honouring `retry_after`), 5xx and network errors twice, then logs `telegram ping failed`.
+- The bot token sits in the request URL, so the URL is never logged; a test checks the token never reaches the logs.
+- On only if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are both set. `/health` reports `sellerPing`.
 
 ## Handoff to session 3
 

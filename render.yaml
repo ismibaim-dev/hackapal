@@ -31,6 +31,10 @@ services:
       # which Render sets to https://<service>.onrender.com. PayPal sends buyers back here.
       - key: PUBLIC_BASE_URL
         sync: false
+      # Protects the internal /api routes (money-path uses it). Render generates a
+      # random value; copy it from the dashboard when you need it for a script.
+      - key: API_KEY
+        generateValue: true
       # Order store (Supabase project "hackapal", Singapore). The URL isn't secret.
       - key: SUPABASE_URL
         value: https://bfnxvbesrsjnfaionbcj.supabase.co

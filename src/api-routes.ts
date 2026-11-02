@@ -6,7 +6,7 @@ import { CartInputSchema } from './pricing.js';
 /**
  * Internal API for scripts (money-path) and debugging. Shares OrderService with the
  * MCP tools. Prices still come only from the catalog: unknown fields are stripped.
- * Unauthenticated, like /mcp: acceptable in sandbox only (see BUILD_LOG assumptions).
+ * Mounted behind requireApiKey (src/auth.ts): callers need the API_KEY.
  */
 const CreateOrderBody = CartInputSchema.extend({
   /** Sandbox demo: make the first capture fail with INSTRUMENT_DECLINED. */

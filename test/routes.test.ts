@@ -8,6 +8,8 @@ import { OrderService } from '../src/orders.js';
 import { InMemoryOrderStore } from '../src/store.js';
 import { eventually, FakePayPal } from './helpers.js';
 
+const API_KEY = 'test-api-key-0123456789abcdef';
+const AUTH = { authorization: `Bearer ${API_KEY}` };
 const servers: Server[] = [];
 
 afterEach(async () => {
@@ -20,6 +22,7 @@ async function start(env: Record<string, string> = {}, withOrders = true) {
     PAYPAL_CLIENT_SECRET: 'secret',
     PAYPAL_WEBHOOK_ID: 'WH-ID-1',
     PUBLIC_BASE_URL: 'https://shop.example',
+    API_KEY,
     ...env,
   });
   const paypal = new FakePayPal();
@@ -43,7 +46,7 @@ async function start(env: Record<string, string> = {}, withOrders = true) {
 async function createOrder(base: string, body: unknown = { items: [{ product_id: 'choc-chip-cookies', quantity: 2 }] }) {
   const res = await fetch(`${base}/api/orders`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...AUTH },
     body: JSON.stringify(body),
   });
   return { res, body: (await res.json()) as Record<string, unknown> };
@@ -81,7 +84,7 @@ describe('/api/orders', () => {
     const unknown = await createOrder(base, { items: [{ product_id: 'caviar', quantity: 1 }] });
     expect(unknown.res.status).toBe(422);
     expect(unknown.body).toMatchObject({ error: 'cannot_price_cart', issues: [{ code: 'UNKNOWN_PRODUCT' }] });
-    const broken = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' });
+    const broken = await fetch(`${base}/api/orders`, { method: 'POST', headers: { 'content-type': 'application/json', ...AUTH }, body: '{' });
     expect(broken.status).toBe(400);
   });
 
@@ -89,11 +92,32 @@ describe('/api/orders', () => {
     const { base, paypal } = await start();
     const { body } = await createOrder(base);
     const id = String(body.order_id);
-    expect(((await (await fetch(`${base}/api/orders/${id}`)).json()) as { status: string }).status).toBe('CREATED');
+    expect(((await (await fetch(`${base}/api/orders/${id}`, { headers: AUTH })).json()) as { status: string }).status).toBe('CREATED');
     paypal.approve(String(body.paypal_order_id));
-    const capture = await fetch(`${base}/api/orders/${id}/capture`, { method: 'POST' });
+    const capture = await fetch(`${base}/api/orders/${id}/capture`, { method: 'POST', headers: AUTH });
     expect(await capture.json()).toMatchObject({ outcome: 'completed', order: { status: 'COMPLETED' } });
-    expect((await fetch(`${base}/api/orders/ord_missing`)).status).toBe(404);
+    expect((await fetch(`${base}/api/orders/ord_missing`, { headers: AUTH })).status).toBe(404);
+  });
+
+  it('refuses requests without the right API key', async () => {
+    const { base, paypal } = await start();
+    const body = JSON.stringify({ items: [{ product_id: 'choc-chip-cookies', quantity: 1 }] });
+    const json = { 'content-type': 'application/json' };
+    const none = await fetch(`${base}/api/orders`, { method: 'POST', headers: json, body });
+    expect(none.status).toBe(401);
+    expect(none.headers.get('www-authenticate')).toBe('Bearer');
+    const wrong = await fetch(`${base}/api/orders`, { method: 'POST', headers: { ...json, authorization: 'Bearer nope' }, body });
+    expect(wrong.status).toBe(401);
+    const viaHeader = await fetch(`${base}/api/orders`, { method: 'POST', headers: { ...json, 'x-api-key': API_KEY }, body });
+    expect(viaHeader.status).toBe(201);
+    expect((await fetch(`${base}/api/orders/ord_x`)).status).toBe(401);
+    expect(paypal.createCalls).toHaveLength(1);
+  });
+
+  it('switches /api off when no API key is configured', async () => {
+    const { base } = await start({ API_KEY: '' });
+    expect((await fetch(`${base}/api/orders/ord_x`, { headers: AUTH })).status).toBe(503);
+    expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ apiKeyConfigured: false });
   });
 
   it('answers 503 when PayPal is not configured', async () => {
@@ -171,7 +195,7 @@ describe('POST /webhooks/paypal', () => {
     expect(call.headers['paypal-transmission-id']).toBe('tx-1');
 
     await eventually(async () => (await store.get(String(body.order_id)))?.status === 'COMPLETED');
-    const view = (await (await fetch(`${base}/api/orders/${body.order_id}`)).json()) as Record<string, unknown>;
+    const view = (await (await fetch(`${base}/api/orders/${body.order_id}`, { headers: AUTH })).json()) as Record<string, unknown>;
     expect(view.webhooks_received).toEqual([
       expect.objectContaining({ event_id: 'WH-1', event_type: 'CHECKOUT.ORDER.APPROVED' }),
     ]);
@@ -192,7 +216,7 @@ describe('POST /webhooks/paypal', () => {
     expect(paypal.verifyCalls).toHaveLength(2);
     expect(paypal.captureCalls).toHaveLength(1);
     // The event-id dedupe caught the second delivery: it was never recorded or processed.
-    const view = (await (await fetch(`${base}/api/orders/${body.order_id}`)).json()) as Record<string, unknown>;
+    const view = (await (await fetch(`${base}/api/orders/${body.order_id}`, { headers: AUTH })).json()) as Record<string, unknown>;
     expect(view.webhooks_received).toEqual([expect.objectContaining({ event_id: 'WH-RETRY' })]);
   });
 

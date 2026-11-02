@@ -1,8 +1,9 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { apiRoutes } from './api-routes.js';
+import { requireApiKey } from './auth.js';
 import { hasPayPalCredentials, type AppConfig } from './config.js';
 import { log } from './log.js';
-import { mcpRoutes } from './mcp.js';
+import { mcpRoutes, type McpLimits } from './mcp.js';
 import type { OrderService } from './orders.js';
 import type { PayPalGateway } from './paypal.js';
 import { PayPalHttpError } from './paypal-http.js';
@@ -13,9 +14,11 @@ export interface AppDeps {
   /** Present when PayPal credentials are configured (see server.ts). */
   orders?: OrderService;
   paypal?: PayPalGateway;
+  /** Override the /mcp rate limits (tests). */
+  mcpLimits?: McpLimits;
 }
 
-export function createApp({ config, orders, paypal }: AppDeps): Express {
+export function createApp({ config, orders, paypal, mcpLimits }: AppDeps): Express {
   const app = express();
   app.disable('x-powered-by');
   // Render terminates TLS in front of us; trust its X-Forwarded-* headers.
@@ -38,13 +41,14 @@ export function createApp({ config, orders, paypal }: AppDeps): Express {
       },
       orderStore: config.supabase ? 'supabase' : 'memory',
       stockStore: config.supabase ? 'supabase' : 'memory',
+      apiKeyConfigured: Boolean(config.apiKey),
     });
   });
 
   if (orders && paypal) {
     app.use(paypalRoutes({ orders, paypal, webhookId: config.paypal.webhookId }));
-    app.use('/api', apiRoutes({ orders }));
-    app.use(mcpRoutes({ orders }));
+    app.use('/api', requireApiKey(config.apiKey), apiRoutes({ orders }));
+    app.use(mcpRoutes({ orders, ...(mcpLimits ? { limits: mcpLimits } : {}) }));
   } else {
     app.use(['/paypal', '/webhooks', '/api', '/mcp'], (_req, res) => {
       res.status(503).json({ error: 'paypal_not_configured' });

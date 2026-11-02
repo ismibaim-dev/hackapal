@@ -22,6 +22,8 @@ const EnvSchema = z.object({
   PAYPAL_CLIENT_ID: z.string().optional(),
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_WEBHOOK_ID: z.string().optional(),
+  // Protects the internal /api routes. Long random string; without it /api is switched off.
+  API_KEY: z.string().min(24, { error: 'API_KEY must be at least 24 characters' }).optional(),
   SUPABASE_URL: z.url({ protocol: /^https$/, error: 'SUPABASE_URL must be an https URL' }).optional(),
   SUPABASE_SECRET_KEY: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
@@ -38,6 +40,8 @@ export interface AppConfig {
     clientSecret?: string;
     webhookId?: string;
   };
+  /** Key for the internal /api routes; /api answers 503 without it. */
+  apiKey?: string;
   /** Present when both SUPABASE_URL and SUPABASE_SECRET_KEY are set; otherwise orders live in memory. */
   supabase?: { url: string; secretKey: string };
   telegram?: { botToken: string; chatId: string };
@@ -89,6 +93,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       clientSecret: e.PAYPAL_CLIENT_SECRET,
       webhookId: e.PAYPAL_WEBHOOK_ID,
     },
+    apiKey: e.API_KEY,
     supabase:
       e.SUPABASE_URL && e.SUPABASE_SECRET_KEY ? { url: e.SUPABASE_URL, secretKey: e.SUPABASE_SECRET_KEY } : undefined,
     telegram:

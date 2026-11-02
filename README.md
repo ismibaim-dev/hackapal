@@ -50,6 +50,7 @@ npm test
 | `PAYPAL_WEBHOOK_ID` | webhooks | ID of the sandbox webhook that points at `/webhooks/paypal`. |
 | `PUBLIC_BASE_URL` | buyer redirects | Where PayPal sends the buyer back. Defaults to Render's `RENDER_EXTERNAL_URL` when present, else `http://localhost:$PORT`. |
 | `PORT` | optional | Defaults to 3000. Render sets it for you. |
+| `API_KEY` | `/api/*` | 24+ random characters. Sent as `Authorization: Bearer <key>` (or `X-API-Key`). Without it `/api` answers 503. Render generates one. |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | persistent orders | Supabase project URL and secret key (server only). Without both, orders and stock live in memory and reset on restart. Schema: `supabase/migrations/`. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | optional | Seller ping on new paid orders. Both or neither. |
 | `LOG_LEVEL` | optional | `debug`, `info` (default), `warn`, `error` or `silent`. |
@@ -62,7 +63,7 @@ npm test
 | `npm run build`, `npm start` | Compile to `dist/` and run it. This is what Render does. |
 | `npm test` | Unit tests (vitest). |
 | `npm run typecheck` | Strict type check of `src`, `scripts` and `test`. |
-| `npm run money-path -- --base-url <url> [--simulate-decline]` | Test 1: creates an order on our server, prints the PayPal link for the sandbox buyer, follows the status to `COMPLETED` and waits for the verified webhook. |
+| `npm run money-path -- --base-url <url> [--simulate-decline] [--api-key <key>]` | Test 1: creates an order on our server, prints the PayPal link for the sandbox buyer, follows the status to `COMPLETED` and waits for the verified webhook. |
 | `npm run mcp-smoke -- <url>/mcp` | Test 2a: connects to our MCP endpoint, lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
 | `npm run probe-paypal-mcp` | Lists PayPal's sandbox MCP tools with and without `x-feature-flags: commerce:true` (result in the build log). |
 
@@ -100,6 +101,7 @@ docs/         build log and evidence
 - Credentials come only from environment variables, and logs redact secret-looking keys.
 - Orders v2 only (no `v1/payments`, NVP or SOAP), through `@paypal/paypal-server-sdk`.
 - A `PayPal-Request-Id` on every POST (`create-<order>`, `capture-<order>-<attempt>`), one cached OAuth token, retries with backoff on 429/5xx/network errors only, and the PayPal `debug_id` logged on every error.
+- `/api/*` needs the `API_KEY`. `/mcp` is the public storefront (any buyer's assistant must reach it), so it is rate-limited instead: 120 requests a minute per IP, and `create_order` at most 20 per IP and 60 in total per 10 minutes. Creating an order moves no money and takes no stock.
 - Webhooks are verified with PayPal using the raw request body, byte for byte, before anything is processed. Duplicates are skipped and statuses never move backwards.
 
 ## Deploy to Render

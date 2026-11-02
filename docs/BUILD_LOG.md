@@ -71,6 +71,13 @@ Added in session 2, while building Phase 1:
     - A PayPal webhook that hits a sleeping service waits for the wake-up. If PayPal gives up first, it redelivers later. That's safe: events are deduped by id, and status changes are idempotent (see "Webhook retries" in the session 2 follow-up).
     - **Before judging (Dec 2 to 16):** ~~move the order store to Supabase~~ (done 2026-11-02, see "Supabase order store" in the session log), and either add an uptime pinger on `/health` or switch to the paid size with the Render hackathon credit (`plan: 0.5c-512mb`, the old "starter"). A pinger that keeps the service awake 24/7 uses about 720 to 744 of the workspace's 750 free hours a month, so it only works for this one service. If the hours run out with no card on file, Render suspends every free service for the rest of the month.
 
+15. **`/api` needs a key; `/mcp` stays public with rate limits** (Baim, 2026-11-02).
+    - `/mcp` is the storefront: any buyer's assistant, and the judges' claude.ai connector, must reach it. claude.ai custom connectors offer no auth or full OAuth, with no static key, so a key there would break T2b. OAuth was rejected as days of work for a sandbox demo.
+    - What `/mcp` exposes is bounded. Creating an order moves no money and takes no stock, and order ids are 60-bit random.
+    - So it gets per-IP and global limits instead: 120 requests/min per IP (HTTP 429 with `Retry-After`), and `create_order` at most 20 per IP and 60 in total per 10 minutes (a tool error; PayPal is never called).
+    - `/api/*` (`simulate_decline`, manual capture) requires `API_KEY` as `Authorization: Bearer` or `X-API-Key`, compared in constant time. Without a configured key `/api` answers 503, so it can't be left open by accident. Render generates the key (`generateValue: true`).
+    - Limits are in memory, per instance: enough against a runaway client or a casual spammer, not against a distributed attack. Before any real money: proper auth (OAuth) for private shops and a shared limiter.
+
 Assumptions (change them if wrong):
 
 - `shipping_preference: NO_SHIPPING`. Fulfilment is pickup or local delivery arranged after payment.
@@ -78,7 +85,7 @@ Assumptions (change them if wrong):
 - Stock is checked when an order is created and taken when its capture completes. Taking stock clamps at zero and reports any oversell.
 - `get_order_status` reconciles with PayPal: if PayPal says APPROVED and we haven't captured, it captures (except in `NEEDS_NEW_FUNDING`, see decision 10). A lost webhook can't strand a buyer who clicked "Pay Now".
 - Webhook handlers never move an order backwards. A late `CHECKOUT.ORDER.APPROVED` after `COMPLETED` does nothing.
-- `/mcp` has no authentication for now. That's acceptable in sandbox only, and must change before any real money.
+- ~~`/mcp` has no authentication for now.~~ Superseded by design decision 15: `/mcp` stays public by design, with rate limits; `/api` needs a key.
 
 ## Environment findings (session 1, 2026-11-01)
 
@@ -176,8 +183,12 @@ Assumptions (change them if wrong):
   - Taking 5 of the remaining 1 for another order clamped at 0 with `short_by: 4`.
   - The publishable key is refused on `rpc/take_stock` and on `stock` (`42501`).
   - The security advisor reports only the intended INFO `rls_enabled_no_policy`, one per table.
+- **Live on Render (commit `0f931f6`, 03:17 UTC):**
+  - `/health` reported `"stockStore": "supabase"`.
+  - The server seeded `public.stock` with 24, 15 and 10, and `list_products` over the deployed MCP endpoint returned those numbers.
+  - Paid order `ord_zp6ht17jmjzp` (PayPal, 2 x Chocolate chip cookies, $12.00, approved by Baim in sandbox) reached `COMPLETED` at 03:19:36, capture `0MM61912RS3958306`. In the same instant, cookies stock went 24 -> 22 with exactly one `stock_movements` row (quantity 2, `short_by` 0).
+  - The verified `PAYMENT.CAPTURE.COMPLETED` webhook arrived 21 s later (03:19:57). Stock stayed at 22 and there was still one movement, so the second completion path did not take stock again.
 - **Not covered yet:**
-  - A real paid order taking stock on Render needs a sandbox approval.
   - The live Supabase contract tests need `TEST_SUPABASE_URL` and `TEST_SUPABASE_SECRET_KEY`.
   - Order completion and the stock take are separate statements, not one transaction. If the process dies between them, that sale's stock isn't taken; `stock take failed` or a missing movement row shows it.
 

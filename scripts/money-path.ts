@@ -4,9 +4,12 @@
 //   npm run money-path -- --base-url https://<service>.onrender.com
 //   npm run money-path -- --base-url https://<service>.onrender.com --simulate-decline
 //
+// /api needs the server's API_KEY: --api-key <key>, or HACKAPAL_API_KEY in the env or .env.
+//
 // It talks to our server over HTTP (/api/orders), never to PayPal directly: each process
 // has its own in-memory store, so the order must live where the webhooks arrive.
 import { parseArgs } from 'node:util';
+import { loadDotEnv } from '../src/config.js';
 
 interface OrderView {
   order_id: string;
@@ -27,8 +30,13 @@ const { values } = parseArgs({
     quantity: { type: 'string', default: '2' },
     'timeout-min': { type: 'string', default: '15' },
     'webhook-wait-sec': { type: 'string', default: '120' },
+    'api-key': { type: 'string' },
   },
 });
+
+loadDotEnv();
+// The deployed server's API_KEY (Render > hackapal > Environment). Flag, then HACKAPAL_API_KEY, then API_KEY.
+const apiKey = values['api-key'] ?? process.env.HACKAPAL_API_KEY ?? process.env.API_KEY;
 
 const baseUrl = String(values['base-url']).replace(/\/+$/, '');
 const simulateDecline = Boolean(values['simulate-decline']);
@@ -44,7 +52,12 @@ const stamp = () => new Date().toISOString().slice(11, 19);
 const say = (msg: string) => console.log(`[${stamp()}] ${msg}`);
 
 async function api<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T }> {
-  const res = await fetch(`${baseUrl}${path}`, init);
+  const headers = new Headers(init?.headers);
+  if (path.startsWith('/api/') && apiKey) headers.set('authorization', `Bearer ${apiKey}`);
+  const res = await fetch(`${baseUrl}${path}`, { ...init, headers });
+  if (res.status === 401 && path.startsWith('/api/')) {
+    throw new Error('the server refused the API key: pass --api-key or set HACKAPAL_API_KEY (Render > hackapal > Environment > API_KEY)');
+  }
   const text = await res.text();
   let body: unknown = text;
   try {

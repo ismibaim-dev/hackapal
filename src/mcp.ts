@@ -7,6 +7,7 @@ import { log } from './log.js';
 import { formatUsd } from './money.js';
 import { toOrderView, type OrderService } from './orders.js';
 import { PayPalHttpError } from './paypal-http.js';
+import { RateLimiter } from './rate-limit.js';
 import { CartInputSchema } from './pricing.js';
 import { ORDER_STATUSES } from './store.js';
 
@@ -30,7 +31,36 @@ function toolError(message: string, details?: unknown): CallToolResult {
   };
 }
 
-export function createMcpServer(orders: OrderService): McpServer {
+/**
+ * Limits for the public storefront. /mcp has no login (any buyer's assistant must reach
+ * it), so these stop a runaway client or spammer from flooding it or mass-creating
+ * PayPal orders. Creating an order moves no money and takes no stock.
+ */
+export interface McpLimits {
+  /** MCP HTTP requests per client IP. */
+  requestsPerIp: RateLimiter;
+  /** create_order calls per client IP. */
+  ordersPerIp: RateLimiter;
+  /** create_order calls across all clients. */
+  ordersGlobal: RateLimiter;
+}
+
+export function defaultMcpLimits(): McpLimits {
+  return {
+    requestsPerIp: new RateLimiter({ limit: 120, windowMs: 60_000 }),
+    ordersPerIp: new RateLimiter({ limit: 20, windowMs: 10 * 60_000 }),
+    ordersGlobal: new RateLimiter({ limit: 60, windowMs: 10 * 60_000 }),
+  };
+}
+
+export interface McpServerOptions {
+  /** Who is calling (client IP), for the order limits. */
+  clientKey?: string;
+  limits?: McpLimits;
+}
+
+export function createMcpServer(orders: OrderService, options: McpServerOptions = {}): McpServer {
+  const clientKey = options.clientKey ?? 'unknown';
   const server = new McpServer(SERVER_INFO, {
     instructions:
       "This is Auntie's Kitchen, a small home bakery. Use list_products to see what's for sale, " +
@@ -87,6 +117,18 @@ export function createMcpServer(orders: OrderService): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async ({ items }) => {
+      const limits = options.limits;
+      if (limits) {
+        const perIp = limits.ordersPerIp.hit(clientKey);
+        const global = perIp.allowed ? limits.ordersGlobal.hit('global') : perIp;
+        if (!perIp.allowed || !global.allowed) {
+          log.warn('mcp create_order rate limited', { client: clientKey, scope: perIp.allowed ? 'global' : 'ip' });
+          return toolError(
+            `The shop is taking too many new orders right now. Nothing was created or charged. ` +
+              `Try again in about ${global.retryAfterSeconds} seconds.`,
+          );
+        }
+      }
       try {
         const result = await orders.createOrder({ items });
         if (!result.ok) {
@@ -147,11 +189,25 @@ function methodNotAllowed(res: Response): void {
 }
 
 /** POST /mcp: stateless Streamable HTTP, a new server and transport per request. */
-export function mcpRoutes({ orders }: { orders: OrderService }): Router {
+export function mcpRoutes({ orders, limits = defaultMcpLimits() }: { orders: OrderService; limits?: McpLimits }): Router {
   const router = Router();
 
+  router.post('/mcp', (req, res, next) => {
+    // Checked before parsing the body, so a flood costs as little as possible.
+    const verdict = limits.requestsPerIp.hit(req.ip ?? 'unknown');
+    if (verdict.allowed) {
+      next();
+      return;
+    }
+    log.warn('mcp request rate limited', { ip: req.ip });
+    res
+      .status(429)
+      .set('Retry-After', String(verdict.retryAfterSeconds))
+      .json({ jsonrpc: '2.0', error: { code: -32000, message: 'Too many requests. Slow down.' }, id: null });
+  });
+
   router.post('/mcp', express.json({ limit: '64kb' }), async (req, res) => {
-    const server = createMcpServer(orders);
+    const server = createMcpServer(orders, { clientKey: req.ip ?? 'unknown', limits });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();

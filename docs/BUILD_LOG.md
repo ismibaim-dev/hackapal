@@ -69,7 +69,7 @@ Added in session 2, while building Phase 1:
     - A restart or sleep wipes the in-memory order store (and the webhook dedupe memory). Orders created before it are gone, and their late webhooks are logged as "unknown order" and ignored.
     - **During tests, approve payments within a few minutes** of creating the order, and don't push to the deployed branch mid-test (auto-deploy restarts the service).
     - A PayPal webhook that hits a sleeping service waits for the wake-up. If PayPal gives up first, it redelivers later. That's safe: events are deduped by id, and status changes are idempotent (see "Webhook retries" in the session 2 follow-up).
-    - **Before judging (Dec 2 to 16):** move the order store to Supabase, and either add an uptime pinger on `/health` or switch to the paid size with the Render hackathon credit (`plan: 0.5c-512mb`, the old "starter"). A pinger that keeps the service awake 24/7 uses about 720 to 744 of the workspace's 750 free hours a month, so it only works for this one service. If the hours run out with no card on file, Render suspends every free service for the rest of the month.
+    - **Before judging (Dec 2 to 16):** ~~move the order store to Supabase~~ (done 2026-11-02, see "Supabase order store" in the session log), and either add an uptime pinger on `/health` or switch to the paid size with the Render hackathon credit (`plan: 0.5c-512mb`, the old "starter"). A pinger that keeps the service awake 24/7 uses about 720 to 744 of the workspace's 750 free hours a month, so it only works for this one service. If the hours run out with no card on file, Render suspends every free service for the rest of the month.
 
 Assumptions (change them if wrong):
 
@@ -144,6 +144,17 @@ Assumptions (change them if wrong):
   3. Even without that memory (a free-plan restart), the handlers are idempotent: statuses never move backwards, stock and the seller ping happen only on the move to `COMPLETED`, and capture is single-flight with a stable request id.
   4. Hardened: the verify call's `PayPal-Request-Id` was `verify-<transmission_id>`, a value the sender chooses. It is now random per delivery, so a stored verification result can never be replayed for another delivery.
   - New tests: a redelivered event answered 200 twice but processed once; the same capture under a new event id takes stock once; a fresh verify request id per delivery. 141 tests passing.
+
+### Supabase order store (2026-11-02)
+
+- **Project:** new free Supabase project `hackapal` (`bfnxvbesrsjnfaionbcj`, ap-southeast-1), separate from the org's other project, which holds another app's live data. Baim chose this so a leaked hackapal key can't reach that data.
+- **Schema:** `supabase/migrations/20261101000000_orders.sql`, applied through the Supabase connector. It has check constraints for the id format, USD, non-negative cents and known statuses, and a unique `paypal_order_id`. RLS is on with no policies and no grants for `anon`/`authenticated`. The security advisor reports only the expected INFO `rls_enabled_no_policy`.
+- **Code:** `SupabaseOrderStore` implements `OrderStore` (merged in PR #5). The server uses it when `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are set, and `/health` reports `orderStore`.
+- **Live checks on Render (commit `14738ae`):**
+  - 02:40 UTC: `/health` showed `"orderStore": "supabase"`. `POST /api/orders` created `ord_d4e56g128jy0` (PayPal `1BE02912FU203531P`, $8.00); the row was visible in `public.orders` via SQL, and `GET /api/orders/ord_d4e56g128jy0` read it back.
+  - The publishable key is refused for both reading and inserting: HTTP 401, `42501 permission denied for table orders`.
+  - **Restart survival:** no traffic for 17 minutes, so the free instance slept. At 02:57 the wake-up request took 22.8 s and `/health` showed `uptimeSeconds: 13`, a fresh process. `ord_d4e56g128jy0` was still there.
+- **Still in memory:** product stock (resets to the catalog values on restart) and the webhook dedupe set (safe because status changes are idempotent). The Supabase contract tests in `test/store-contract.test.ts` have not been run against the live project yet; they need `TEST_SUPABASE_URL` and `TEST_SUPABASE_SECRET_KEY` in the environment.
 
 ## Handoff to session 3
 

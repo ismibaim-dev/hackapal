@@ -42,6 +42,7 @@ export function createApp({ config, orders, paypal, mcpLimits }: AppDeps): Expre
       orderStore: config.supabase ? 'supabase' : 'memory',
       stockStore: config.supabase ? 'supabase' : 'memory',
       apiKeyConfigured: Boolean(config.apiKey),
+      sellerPing: config.telegram ? 'telegram' : 'off',
     });
   });
 

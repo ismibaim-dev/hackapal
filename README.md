@@ -115,6 +115,7 @@ npm test
 | `npm run typecheck` | Strict type check of `src`, `scripts` and `test`. |
 | `npm run money-path -- --base-url <url> [--simulate-decline] [--api-key <key>]` | Test 1: creates an order on our server, prints the PayPal link for the sandbox buyer, follows the status to `COMPLETED` and waits for the verified webhook. |
 | `npm run mcp-smoke -- <url>/mcp` | Test 2a: connects to our MCP endpoint, lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
+| `npm run stock -- --base-url <url> [--set <product-id>=<n> ...]` | Shows live stock, or sets absolute levels (seller restock). Needs the server's `API_KEY` (`--api-key` or `HACKAPAL_API_KEY`). |
 | `npm run probe-paypal-mcp` | Lists PayPal's sandbox MCP tools with and without `x-feature-flags: commerce:true` (result in the build log). |
 
 ## Project layout

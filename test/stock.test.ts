@@ -19,6 +19,15 @@ describe('CatalogStockStore', () => {
     expect(await stock.take('ord_b', 'choc-chip-cookies', 2)).toMatchObject({ remaining: 20, applied: true });
   });
 
+  it('sets absolute levels for a restock', async () => {
+    const stock = new CatalogStockStore(createCatalog());
+    await stock.setLevels(new Map([['choc-chip-cookies', 50], ['onde-onde', 0]]));
+    const levels = await stock.levels();
+    expect(levels.get('choc-chip-cookies')).toBe(50);
+    expect(levels.get('onde-onde')).toBe(0);
+    expect(levels.get('kuih-lapis')).toBe(15);
+  });
+
   it('clamps at zero and reports an oversell', async () => {
     const stock = new CatalogStockStore(createCatalog());
     expect(await stock.take('ord_a', 'pineapple-tarts', 13)).toEqual({ remaining: 0, shortBy: 3, applied: true });
@@ -68,11 +77,18 @@ describe('SupabaseStockStore (fake client)', () => {
         { product_id: 'choc-chip-cookies', stock: 24 },
         { product_id: 'kuih-lapis', stock: 15 },
         { product_id: 'pineapple-tarts', stock: 10 },
+        { product_id: 'kuih-seri-muka', stock: 20 },
+        { product_id: 'onde-onde', stock: 25 },
+        { product_id: 'curry-puffs', stock: 30 },
+        { product_id: 'kuih-bahulu', stock: 20 },
+        { product_id: 'pandan-chiffon', stock: 10 },
       ],
       { onConflict: 'product_id', ignoreDuplicates: true },
     ]);
     // Live level wins; a catalog product missing from the table counts as 0, not its seed value.
-    expect(levels).toEqual(new Map([['choc-chip-cookies', 3], ['kuih-lapis', 0], ['pineapple-tarts', 0]]));
+    expect(levels.get('choc-chip-cookies')).toBe(3);
+    expect(levels.get('kuih-lapis')).toBe(0);
+    expect([...levels.keys()]).toEqual(createCatalog().productIds());
   });
 
   it('takes stock through take_stock with the order id', async () => {
@@ -83,6 +99,17 @@ describe('SupabaseStockStore (fake client)', () => {
       'take_stock',
       { p_order_id: 'ord_abc', p_product_id: 'kuih-lapis', p_quantity: 2 },
     ]);
+  });
+
+  it('restocks with an upsert that overwrites the level', async () => {
+    const { db, calls } = fakeDb();
+    const stock = new SupabaseStockStore(db, createCatalog());
+    await stock.setLevels(new Map([['choc-chip-cookies', 50]]));
+    const upserts = calls.filter((c) => c.op === 'upsert:stock');
+    expect(upserts).toHaveLength(2); // the one-time seed, then the restock
+    const [rows, options] = upserts[1]!.args as [{ product_id: string; stock: number }[], unknown];
+    expect(rows).toEqual([expect.objectContaining({ product_id: 'choc-chip-cookies', stock: 50 })]);
+    expect(options).toEqual({ onConflict: 'product_id' });
   });
 
   it('retries the seed after a failure instead of caching it', async () => {
@@ -122,9 +149,29 @@ describe('OrderService with a stock store', () => {
     return { service, paypal };
   }
 
+  it('validates a restock before touching the store', async () => {
+    const set: ReadonlyMap<string, number>[] = [];
+    const stock: StockStore = {
+      levels: async () => new Map(),
+      take: async () => ({ remaining: 0, shortBy: 0, applied: true }),
+      setLevels: async (levels) => {
+        set.push(levels);
+      },
+    };
+    const { service } = setup(stock);
+    expect(await service.setStock({ 'caviar': 5, 'choc-chip-cookies': -1 })).toEqual({
+      ok: false,
+      errors: ['Unknown product_id "caviar".', 'Stock for "choc-chip-cookies" must be a whole number from 0 to 1000 (got -1).'],
+    });
+    expect(await service.setStock({})).toMatchObject({ ok: false });
+    expect(set).toHaveLength(0);
+    expect(await service.setStock({ 'choc-chip-cookies': 50, 'onde-onde': 30 })).toEqual({ ok: true });
+    expect(set[0]).toEqual(new Map([['choc-chip-cookies', 50], ['onde-onde', 30]]));
+  });
+
   it('prices against live levels and lists live stock', async () => {
     const levels = new Map([['choc-chip-cookies', 1], ['kuih-lapis', 15], ['pineapple-tarts', 10]]);
-    const stock: StockStore = { levels: async () => levels, take: async () => ({ remaining: 0, shortBy: 0, applied: true }) };
+    const stock: StockStore = { levels: async () => levels, take: async () => ({ remaining: 0, shortBy: 0, applied: true }), setLevels: async () => undefined };
     const { service, paypal } = setup(stock);
     const result = await service.createOrder({ items: [{ product_id: 'choc-chip-cookies', quantity: 2 }] });
     expect(result.ok).toBe(false);
@@ -145,6 +192,7 @@ describe('OrderService with a stock store', () => {
         }
         return { remaining: 10, shortBy: 0, applied: true };
       },
+      setLevels: async () => undefined,
     };
     const { service, paypal } = setup(stock);
     const created = await service.createOrder({

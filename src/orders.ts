@@ -105,6 +105,9 @@ export interface WebhookRecord {
   received_at: string;
 }
 
+/** Upper bound for a restock level; guards against typos like 5000 for 50. */
+export const MAX_STOCK = 1000;
+
 export class OrderService {
   readonly #catalog: Catalog;
   readonly #stock: StockStore;
@@ -131,6 +134,25 @@ export class OrderService {
 
   get catalog(): Catalog {
     return this.#catalog;
+  }
+
+  /**
+   * Seller restock: set absolute stock levels. Every id must be a catalog product and every
+   * level a whole number from 0 to MAX_STOCK; otherwise nothing is changed.
+   */
+  async setStock(levels: Record<string, number>): Promise<{ ok: true } | { ok: false; errors: string[] }> {
+    const errors: string[] = [];
+    for (const [productId, stock] of Object.entries(levels)) {
+      if (!this.#catalog.getProduct(productId)) errors.push(`Unknown product_id "${productId}".`);
+      if (!Number.isSafeInteger(stock) || stock < 0 || stock > MAX_STOCK) {
+        errors.push(`Stock for "${productId}" must be a whole number from 0 to ${MAX_STOCK} (got ${stock}).`);
+      }
+    }
+    if (Object.keys(levels).length === 0) errors.push('Give at least one product level.');
+    if (errors.length > 0) return { ok: false, errors };
+    await this.#stock.setLevels(new Map(Object.entries(levels)));
+    log.info('stock set', { levels });
+    return { ok: true };
   }
 
   /** Catalog products with live stock levels (for list_products). */

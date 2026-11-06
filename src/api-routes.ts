@@ -13,9 +13,34 @@ const CreateOrderBody = CartInputSchema.extend({
   simulate_decline: z.boolean().optional(),
 });
 
+const SetStockBody = z.object({
+  levels: z.record(z.string(), z.number()),
+});
+
 export function apiRoutes({ orders }: { orders: OrderService }): Router {
   const router = Router();
   router.use(express.json({ limit: '32kb' }));
+
+  // Seller restock. GET shows live levels; PUT sets absolute levels.
+  router.get('/stock', async (_req, res) => {
+    const products = await orders.listProducts();
+    res.json({ products: products.map((p) => ({ product_id: p.id, name: p.name, in_stock: p.stock })) });
+  });
+
+  router.put('/stock', async (req, res) => {
+    const parsed = SetStockBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'invalid_request', issues: parsed.error.issues.map((i) => i.message) });
+      return;
+    }
+    const result = await orders.setStock(parsed.data.levels);
+    if (!result.ok) {
+      res.status(400).json({ error: 'invalid_levels', issues: result.errors });
+      return;
+    }
+    const products = await orders.listProducts();
+    res.json({ products: products.map((p) => ({ product_id: p.id, name: p.name, in_stock: p.stock })) });
+  });
 
   router.post('/orders', async (req, res) => {
     const parsed = CreateOrderBody.safeParse(req.body);

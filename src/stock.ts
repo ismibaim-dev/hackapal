@@ -12,6 +12,12 @@ export interface StockStore {
   levels(): Promise<Map<string, number>>;
   /** Remove sold units for one order line. Never refuses: clamps at zero, reports any shortfall. */
   take(orderId: string, productId: string, quantity: number): Promise<StockTakeResult>;
+  /**
+   * Seller restock: set absolute levels for the given products. Absolute (not +n) on
+   * purpose, so a retried request can't double-count. A sale landing at the same
+   * instant can be overwritten; fine for a manual restock.
+   */
+  setLevels(levels: ReadonlyMap<string, number>): Promise<void>;
 }
 
 export interface StockTakeResult extends StockResult {
@@ -41,6 +47,10 @@ export class CatalogStockStore implements StockStore {
     const result = this.#catalog.takeStock(productId, quantity);
     this.#taken.set(key, result);
     return { ...result, applied: true };
+  }
+
+  async setLevels(levels: ReadonlyMap<string, number>): Promise<void> {
+    for (const [productId, stock] of levels) this.#catalog.setStock(productId, stock);
   }
 }
 
@@ -86,6 +96,15 @@ export class SupabaseStockStore implements StockStore {
     const row = (data as { remaining: number; short_by: number; applied: boolean }[] | null)?.[0];
     if (!row) throw new StockStoreError('take', undefined, 'take_stock returned no row');
     return { remaining: row.remaining, shortBy: row.short_by, applied: row.applied };
+  }
+
+  async setLevels(levels: ReadonlyMap<string, number>): Promise<void> {
+    await this.#ensureSeeded();
+    const now = new Date().toISOString();
+    const rows = [...levels].map(([product_id, stock]) => ({ product_id, stock, updated_at: now }));
+    if (rows.length === 0) return;
+    const { error } = await this.#db.from('stock').upsert(rows, { onConflict: 'product_id' });
+    if (error) throw new StockStoreError('set', error.code, error.message);
   }
 
   /** Insert catalog products that aren't in the table yet. Runs once; retried after a failure. */

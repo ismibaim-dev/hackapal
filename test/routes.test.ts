@@ -99,6 +99,22 @@ describe('/api/orders', () => {
     expect((await fetch(`${base}/api/orders/ord_missing`, { headers: AUTH })).status).toBe(404);
   });
 
+  it('shows and restocks live stock behind the API key', async () => {
+    const { base } = await start();
+    const json = { 'content-type': 'application/json', ...AUTH };
+    const before = (await (await fetch(`${base}/api/stock`, { headers: AUTH })).json()) as { products: { product_id: string; in_stock: number }[] };
+    expect(before.products.find((p) => p.product_id === 'choc-chip-cookies')?.in_stock).toBe(24);
+
+    const ok = await fetch(`${base}/api/stock`, { method: 'PUT', headers: json, body: JSON.stringify({ levels: { 'choc-chip-cookies': 50 } }) });
+    expect(ok.status).toBe(200);
+    const after = (await ok.json()) as { products: { product_id: string; in_stock: number }[] };
+    expect(after.products.find((p) => p.product_id === 'choc-chip-cookies')?.in_stock).toBe(50);
+
+    const bad = await fetch(`${base}/api/stock`, { method: 'PUT', headers: json, body: JSON.stringify({ levels: { caviar: 5 } }) });
+    expect(bad.status).toBe(400);
+    expect((await fetch(`${base}/api/stock`)).status).toBe(401);
+  });
+
   it('refuses requests without the right API key', async () => {
     const { base, paypal } = await start();
     const body = JSON.stringify({ items: [{ product_id: 'choc-chip-cookies', quantity: 1 }] });

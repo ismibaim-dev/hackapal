@@ -208,6 +208,16 @@ Assumptions (change them if wrong):
 - The bot token sits in the request URL, so the URL is never logged; a test checks the token never reaches the logs.
 - On only if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are both set. `/health` reports `sellerPing`.
 
+### Bigger menu and seller restock (2026-11-06)
+
+- **Menu:** five products added to Auntie's Kitchen (8 in total): kuih seri muka ($9), onde-onde ($7), curry puffs ($8), kuih bahulu ($10) and pandan chiffon cake ($15). Prices are still server-side in `src/catalog.ts`. New products are seeded into `public.stock` with their starting stock on the server's first stock read after deploy; existing live levels are never overwritten.
+- **Restock:** `GET /api/stock` and `PUT /api/stock` (behind `API_KEY`), plus `npm run stock`.
+  - Levels are absolute, so repeating a call is harmless.
+  - Ids must be catalog products and levels whole numbers from 0 to 1000; otherwise nothing changes.
+  - A sale at the same instant as a restock can be overwritten (acceptable for a manual action).
+- **Why an endpoint and not SQL:** the Supabase connector is blocked in this session by a permission rule, and seller-managed stock is needed for the platform direction anyway.
+- **Tests:** 175 passing (5 new). The script was tried against a local server: list, set, and a refused wrong key.
+
 ## Handoff to session 3
 
 State: Phase 1 code is done and unit-tested. T1a, T1b and T1c need the Render deploy. Phase 2 (MCP) hasn't started.

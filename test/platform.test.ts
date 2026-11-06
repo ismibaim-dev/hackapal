@@ -20,8 +20,8 @@ describe('demo shops', () => {
   it('route the grocer and the cleaner to their own PayPal account', () => {
     const platform = createPlatform();
     expect(platform.shop('aunties-kitchen')?.payeeEmail).toBeUndefined();
-    expect(platform.shop('kampung-fresh-mart')?.payeeEmail).toBe('johndblend@business.example.com');
-    expect(platform.shop('kilat-home-cleaning')?.payeeEmail).toBe('johndblend@business.example.com');
+    expect(platform.shop('kampung-fresh-mart')?.payeeEmail).toBe('sb-cjqou53656464@business.example.com');
+    expect(platform.shop('kilat-home-cleaning')?.payeeEmail).toBe('sb-cjqou53656464@business.example.com');
   });
 });
 

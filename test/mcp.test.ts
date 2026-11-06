@@ -86,7 +86,7 @@ describe('/mcp (marketplace)', () => {
     );
     expect(body).toMatchObject({ status: 'CREATED', total: '$11.00', shop: { shop_id: 'kampung-fresh-mart', name: 'Kampung Fresh Mart' } });
     expect(body.next_step).toContain('Kampung Fresh Mart');
-    expect(paypal.createCalls[0]).toMatchObject({ brandName: 'Kampung Fresh Mart', payeeEmail: 'johndblend@business.example.com' });
+    expect(paypal.createCalls[0]).toMatchObject({ brandName: 'Kampung Fresh Mart', payeeEmail: 'sb-cjqou53656464@business.example.com' });
   });
 
   it('create_order refuses a cart that mixes shops, and points at the right shop for a foreign item', async () => {

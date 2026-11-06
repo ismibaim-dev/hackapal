@@ -114,9 +114,8 @@ export const AUNTIES_KITCHEN: Readonly<ShopSeed> = Object.freeze({
 });
 
 /**
- * A neighbourhood grocer with its own payee setting. Note: johndblend@business.example.com turned out
- * to be the account that owns our REST app (BUILD_LOG M2), so until a second sandbox merchant
- * exists this pays the same account as Auntie's Kitchen.
+ * A neighbourhood grocer. Paid into a second sandbox merchant account, not the one that owns our
+ * REST app (that is johndblend@business.example.com, which Auntie's Kitchen uses by default).
  */
 export const KAMPUNG_FRESH_MART: Readonly<ShopSeed> = Object.freeze({
   id: 'kampung-fresh-mart',
@@ -127,7 +126,7 @@ export const KAMPUNG_FRESH_MART: Readonly<ShopSeed> = Object.freeze({
   fulfilment:
     'Same-day delivery within 5 km, or pickup at the shop. After payment the grocer confirms the delivery time.',
   currency: 'USD',
-  payeeEmail: 'johndblend@business.example.com',
+  payeeEmail: 'sb-cjqou53656464@business.example.com',
   products: Object.freeze([
     { id: 'eggs-30', name: 'Grade A eggs', description: 'Fresh grade A chicken eggs from a local farm. Tray of 30.', unit: 'tray of 30', priceCents: 550, stock: 40 },
     { id: 'jasmine-rice-5kg', name: 'Jasmine rice', description: 'Fragrant long-grain jasmine rice. 5 kg bag.', unit: '5 kg bag', priceCents: 900, stock: 30 },
@@ -138,7 +137,10 @@ export const KAMPUNG_FRESH_MART: Readonly<ShopSeed> = Object.freeze({
   ]),
 });
 
-/** A home-cleaning service. Each "unit" is one booked visit; stock is open slots this week. */
+/**
+ * A home-cleaning service. Each "unit" is one booked visit; stock is open slots this week. Shares the
+ * grocer's sandbox merchant account (only one second account exists for the demo).
+ */
 export const KILAT_HOME_CLEANING: Readonly<ShopSeed> = Object.freeze({
   id: 'kilat-home-cleaning',
   name: 'Kilat Home Cleaning',
@@ -148,7 +150,7 @@ export const KILAT_HOME_CLEANING: Readonly<ShopSeed> = Object.freeze({
   fulfilment:
     'Each unit is one booked visit, and stock is the number of open slots this week. After payment the team contacts the buyer to confirm the date, time and address.',
   currency: 'USD',
-  payeeEmail: 'johndblend@business.example.com',
+  payeeEmail: 'sb-cjqou53656464@business.example.com',
   products: Object.freeze([
     { id: 'standard-clean-3h', name: 'Standard home clean', description: 'One cleaner for 3 hours: dusting, mopping, kitchen and bathrooms.', unit: '1 visit, 3 hours', priceCents: 4500, stock: 12 },
     { id: 'deep-clean-6h', name: 'Deep clean', description: 'Two cleaners for 6 hours, including inside cabinets, windows and grout.', unit: '1 visit, 6 hours', priceCents: 12000, stock: 6 },

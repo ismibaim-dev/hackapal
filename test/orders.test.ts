@@ -373,7 +373,7 @@ describe('OrderService on the marketplace', () => {
     const cleaning = await service.createOrder({ items: [{ product_id: 'standard-clean-3h', quantity: 1 }] });
     const baking = await service.createOrder({ items: [{ product_id: 'kuih-lapis', quantity: 1 }] }, { shopId: 'aunties-kitchen' });
     expect(cleaning.ok && baking.ok).toBe(true);
-    expect(paypal.createCalls[0]).toMatchObject({ brandName: 'Kilat Home Cleaning', payeeEmail: 'johndblend@business.example.com' });
+    expect(paypal.createCalls[0]).toMatchObject({ brandName: 'Kilat Home Cleaning', payeeEmail: 'sb-cjqou53656464@business.example.com' });
     expect(paypal.createCalls[0]?.quote.totalCents).toBe(4500);
     expect(paypal.createCalls[1]?.brandName).toBe("Auntie's Kitchen");
     expect(paypal.createCalls[1]).not.toHaveProperty('payeeEmail');

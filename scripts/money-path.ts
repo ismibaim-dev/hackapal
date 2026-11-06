@@ -19,6 +19,7 @@ interface OrderView {
   total: string;
   paypal_order_id: string;
   capture_id: string | null;
+  shop?: { shop_id: string; name: string };
   simulate_decline?: boolean;
   webhooks_received?: { event_id: string | null; event_type: string; received_at: string }[];
 }
@@ -28,6 +29,8 @@ const { values } = parseArgs({
     'base-url': { type: 'string', default: 'http://localhost:3000' },
     'simulate-decline': { type: 'boolean', default: false },
     quantity: { type: 'string', default: '2' },
+    // Any product of any shop; the order goes to the shop that sells it (e.g. eggs-30 for Kampung Fresh Mart).
+    product: { type: 'string', default: 'choc-chip-cookies' },
     'timeout-min': { type: 'string', default: '15' },
     'webhook-wait-sec': { type: 'string', default: '120' },
     'api-key': { type: 'string' },
@@ -41,6 +44,7 @@ const apiKey = values['api-key'] ?? process.env.HACKAPAL_API_KEY ?? process.env.
 const baseUrl = String(values['base-url']).replace(/\/+$/, '');
 const simulateDecline = Boolean(values['simulate-decline']);
 const quantity = Number(values.quantity);
+const productId = String(values.product);
 const deadline = Date.now() + Number(values['timeout-min']) * 60_000;
 const webhookWaitMs = Number(values['webhook-wait-sec']) * 1000;
 const POLL_MS = 3_000;
@@ -80,13 +84,13 @@ async function main(): Promise<void> {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      items: [{ product_id: 'choc-chip-cookies', quantity }],
+      items: [{ product_id: productId, quantity }],
       ...(simulateDecline ? { simulate_decline: true } : {}),
     }),
   });
   if (created.status !== 201) throw new Error(`create failed: HTTP ${created.status} ${JSON.stringify(created.body)}`);
   const order = created.body;
-  say(`created ${order.order_id} (PayPal ${order.paypal_order_id}), total ${order.total}, status ${order.status}`);
+  say(`created ${order.order_id} for ${order.shop?.name ?? 'unknown shop'} (PayPal ${order.paypal_order_id}), total ${order.total}, status ${order.status}`);
   if (simulateDecline) say(`simulate_decline: ${order.simulate_decline ? 'on (first capture will be declined)' : 'IGNORED by server'}`);
   console.log(`\n  Open this link and approve as the sandbox BUYER:\n\n  ${order.approval_url}\n`);
   if (simulateDecline) {

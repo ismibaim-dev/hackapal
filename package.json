@@ -18,7 +18,8 @@
     "money-path": "tsx scripts/money-path.ts",
     "mcp-smoke": "tsx scripts/mcp-smoke.ts",
     "probe-paypal-mcp": "tsx scripts/probe-paypal-mcp.ts",
-    "stock": "tsx scripts/stock.ts"
+    "stock": "tsx scripts/stock.ts",
+    "probe-payee": "tsx scripts/probe-payee.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

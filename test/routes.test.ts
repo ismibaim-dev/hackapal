@@ -2,9 +2,9 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
-import { createCatalog } from '../src/catalog.js';
 import { loadConfig } from '../src/config.js';
 import { OrderService } from '../src/orders.js';
+import { createPlatform } from '../src/platform.js';
 import { InMemoryOrderStore } from '../src/store.js';
 import { eventually, FakePayPal } from './helpers.js';
 
@@ -28,7 +28,7 @@ async function start(env: Record<string, string> = {}, withOrders = true) {
   const paypal = new FakePayPal();
   const store = new InMemoryOrderStore();
   const orders = new OrderService({
-    catalog: createCatalog(),
+    platform: createPlatform(),
     store,
     paypal,
     publicBaseUrl: config.publicBaseUrl,
@@ -63,6 +63,20 @@ describe('GET /health', () => {
     const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2_000) });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ status: 'ok', paypal: { credentialsConfigured: true, webhookConfigured: true } });
+  });
+});
+
+describe('GET /', () => {
+  it('lists every shop with its own MCP link', async () => {
+    const { base } = await start();
+    const res = await fetch(`${base}/`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('https://shop.example/mcp');
+    expect(html).toContain('https://shop.example/s/kampung-fresh-mart/mcp');
+    expect(html).toContain('Kilat Home Cleaning');
+    expect(html).toContain('Auntie&#39;s Kitchen');
+    expect(html).not.toContain('@');
   });
 });
 
@@ -113,6 +127,23 @@ describe('/api/orders', () => {
     const bad = await fetch(`${base}/api/stock`, { method: 'PUT', headers: json, body: JSON.stringify({ levels: { caviar: 5 } }) });
     expect(bad.status).toBe(400);
     expect((await fetch(`${base}/api/stock`)).status).toBe(401);
+  });
+
+  it('lists stock per shop and creates orders for a named shop', async () => {
+    const { base } = await start();
+    const grocer = (await (await fetch(`${base}/api/stock?shop=kampung-fresh-mart`, { headers: AUTH })).json()) as {
+      products: { shop_id: string; product_id: string }[];
+    };
+    expect(grocer.products).toHaveLength(6);
+    expect(grocer.products.every((p) => p.shop_id === 'kampung-fresh-mart')).toBe(true);
+    expect((await fetch(`${base}/api/stock?shop=nope`, { headers: AUTH })).status).toBe(404);
+
+    const ok = await createOrder(base, { shop_id: 'kilat-home-cleaning', items: [{ product_id: 'sofa-shampoo', quantity: 1 }] });
+    expect(ok.res.status).toBe(201);
+    expect(ok.body).toMatchObject({ total: '$40.00', shop: { shop_id: 'kilat-home-cleaning' } });
+    const wrong = await createOrder(base, { shop_id: 'nope', items: [{ product_id: 'sofa-shampoo', quantity: 1 }] });
+    expect(wrong.res.status).toBe(422);
+    expect(JSON.stringify(wrong.body)).toContain('UNKNOWN_SHOP');
   });
 
   it('refuses requests without the right API key', async () => {

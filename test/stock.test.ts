@@ -224,6 +224,8 @@ describe.skipIf(!(url && key))('SupabaseStockStore (live, needs TEST_SUPABASE_UR
       id: 'test-shop',
       name: 'Test shop',
       description: 'test',
+      category: 'test',
+      area: 'test',
       fulfilment: 'test',
       currency: 'USD',
       products: [{ id, name: 'Test item', description: 'test', unit: 'each', priceCents: 100, stock: 3 }],

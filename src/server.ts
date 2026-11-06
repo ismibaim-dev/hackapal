@@ -1,9 +1,9 @@
 import { createApp, type AppDeps } from './app.js';
-import { createCatalog } from './catalog.js';
 import { ConfigError, hasPayPalCredentials, loadConfig, loadDotEnv, type AppConfig } from './config.js';
 import { log } from './log.js';
 import { OrderService } from './orders.js';
 import { PayPalClient } from './paypal.js';
+import { createPlatform } from './platform.js';
 import { InMemoryOrderStore, type OrderStore } from './store.js';
 import { CatalogStockStore, SupabaseStockStore, type StockStore } from './stock.js';
 import { createSupabaseServerClient, SupabaseOrderStore } from './supabase-store.js';
@@ -26,19 +26,19 @@ const deps: AppDeps = { config };
 if (hasPayPalCredentials(config)) {
   const paypal = new PayPalClient({ clientId: config.paypal.clientId!, clientSecret: config.paypal.clientSecret! });
   deps.paypal = paypal;
-  const catalog = createCatalog();
+  const platform = createPlatform();
   const db = config.supabase ? createSupabaseServerClient(config.supabase.url, config.supabase.secretKey) : undefined;
   const store: OrderStore = db ? new SupabaseOrderStore({ ...config.supabase!, client: db }) : new InMemoryOrderStore();
-  const stock: StockStore = db ? new SupabaseStockStore(db, catalog) : new CatalogStockStore(catalog);
+  const stock: StockStore = db
+    ? new SupabaseStockStore(db, platform.inventory)
+    : new CatalogStockStore(platform.inventory);
   if (!db) log.warn('SUPABASE_URL/SUPABASE_SECRET_KEY not set: orders and stock are kept in memory and lost on restart');
   deps.orders = new OrderService({
-    catalog,
+    platform,
     store,
     stock,
     paypal,
-    ...(config.telegram
-      ? { notifier: new TelegramNotifier({ ...config.telegram, shopName: catalog.shop.name }) }
-      : {}),
+    ...(config.telegram ? { notifier: new TelegramNotifier(config.telegram) } : {}),
     publicBaseUrl: config.publicBaseUrl,
     allowSimulatedDecline: config.paypal.env === 'sandbox',
   });

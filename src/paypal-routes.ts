@@ -31,12 +31,15 @@ export function paypalRoutes({ orders, paypal, webhookId }: PayPalRoutesDeps): R
       return;
     }
 
+    const shopName = orders.shopForOrder(order)?.name;
+    const send = (status: number, page: PageOptions) => sendPage(res, status, shopName ? { ...page, shopName } : page);
+
     let result;
     try {
       result = await orders.capture(order.id, 'return');
     } catch (err) {
       log.error('capture on return failed', { order_id: order.id, err });
-      sendPage(res, 502, {
+      send(502, {
         title: "We couldn't confirm your payment yet",
         paragraphs: [
           'PayPal did not answer in time. You will not be charged twice: trying again is safe.',
@@ -50,17 +53,17 @@ export function paypalRoutes({ orders, paypal, webhookId }: PayPalRoutesDeps): R
 
     switch (result.outcome) {
       case 'completed':
-        sendPage(res, 200, {
+        send(200, {
           title: 'Payment complete',
           paragraphs: [
             'Payment complete, you can go back to your assistant.',
-            "Auntie's Kitchen will contact you to arrange pickup or local delivery.",
+            `${shopName ?? 'The seller'} will contact you to arrange the next step.`,
           ],
           tone: 'success',
         });
         return;
       case 'pending':
-        sendPage(res, 200, {
+        send(200, {
           title: 'Payment received, waiting for PayPal',
           paragraphs: [
             'PayPal accepted your payment but is holding it for a short review.',
@@ -73,7 +76,7 @@ export function paypalRoutes({ orders, paypal, webhookId }: PayPalRoutesDeps): R
         res.set('Cache-Control', 'no-store').redirect(302, result.order.approvalUrl);
         return;
       case 'not_approved':
-        sendPage(res, 200, {
+        send(200, {
           title: 'Payment not approved yet',
           paragraphs: ["PayPal hasn't confirmed your approval for this order. Nothing was charged."],
           link: { href: result.order.approvalUrl, label: 'Open PayPal again' },
@@ -81,7 +84,7 @@ export function paypalRoutes({ orders, paypal, webhookId }: PayPalRoutesDeps): R
         });
         return;
       case 'failed':
-        sendPage(res, 200, {
+        send(200, {
           title: "This order can't be paid",
           paragraphs: ['Nothing was charged. Please ask your assistant to start a new order.'],
           tone: 'warning',
@@ -94,8 +97,10 @@ export function paypalRoutes({ orders, paypal, webhookId }: PayPalRoutesDeps): R
   router.get('/paypal/cancel', async (req, res) => {
     const token = typeof req.query.token === 'string' ? req.query.token : '';
     const order = token ? await orders.cancelByPayPalOrderId(token) : undefined;
+    const shopName = order ? orders.shopForOrder(order)?.name : undefined;
     if (order?.status === 'COMPLETED') {
       sendPage(res, 200, {
+        ...(shopName ? { shopName } : {}),
         title: 'Already paid',
         paragraphs: ['This order was already paid, so nothing was cancelled. You can go back to your assistant.'],
         tone: 'success',
@@ -103,6 +108,7 @@ export function paypalRoutes({ orders, paypal, webhookId }: PayPalRoutesDeps): R
       return;
     }
     sendPage(res, 200, {
+      ...(shopName ? { shopName } : {}),
       title: 'Payment cancelled',
       paragraphs: [
         'Nothing was charged.',

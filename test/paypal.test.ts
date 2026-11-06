@@ -77,6 +77,19 @@ function setup(orders: Partial<Record<keyof OrdersApi, (...args: unknown[]) => u
 }
 
 describe('buildOrderRequest', () => {
+  it("names the seller as payee when the shop has its own PayPal account (option B)", () => {
+    const body = buildOrderRequest({
+      orderId: 'ord_abc',
+      quote: quote(),
+      brandName: 'Kampung Fresh Mart',
+      returnUrl: 'https://shop.example/paypal/return',
+      cancelUrl: 'https://shop.example/paypal/cancel',
+      payeeEmail: 'seller@business.example.com',
+    });
+    expect(body.purchaseUnits[0]?.payee).toEqual({ emailAddress: 'seller@business.example.com' });
+    expect(body.purchaseUnits[0]?.description).toBe('Kampung Fresh Mart order ord_abc');
+  });
+
   it('builds an Orders v2 CAPTURE request from the quote only, in decimal strings', () => {
     const body = buildOrderRequest({
       orderId: 'ord_abc',

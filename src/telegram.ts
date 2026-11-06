@@ -1,3 +1,4 @@
+import type { ShopInfo } from './catalog.js';
 import { log } from './log.js';
 import { formatUsd } from './money.js';
 import type { SellerNotifier } from './orders.js';
@@ -7,13 +8,13 @@ import type { Order } from './store.js';
 /**
  * Seller ping on Telegram: one message per order, sent when its capture completes
  * (OrderService calls orderCompleted exactly once, on the move to COMPLETED).
+ * One chat for the whole platform (the demo operator); the message names the shop.
  * Uses the Bot API's sendMessage as plain text (no parse_mode, so nothing in an order
  * can turn into markup). The bot token sits in the URL path, so the URL is never logged.
  */
 export interface TelegramNotifierOptions {
   botToken: string;
   chatId: string;
-  shopName: string;
   fetch?: FetchLike;
   sleep?: (ms: number) => Promise<void>;
   /** Retries after the first attempt, for 429 and 5xx. */
@@ -23,7 +24,6 @@ export interface TelegramNotifierOptions {
 export class TelegramNotifier implements SellerNotifier {
   readonly #url: string;
   readonly #chatId: string;
-  readonly #shopName: string;
   readonly #fetch: FetchLike;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #maxRetries: number;
@@ -31,14 +31,13 @@ export class TelegramNotifier implements SellerNotifier {
   constructor(options: TelegramNotifierOptions) {
     this.#url = `https://api.telegram.org/bot${options.botToken}/sendMessage`;
     this.#chatId = options.chatId;
-    this.#shopName = options.shopName;
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#maxRetries = options.maxRetries ?? 2;
   }
 
-  async orderCompleted(order: Order): Promise<void> {
-    const text = formatOrderMessage(order, this.#shopName);
+  async orderCompleted(order: Order, shop: Readonly<ShopInfo>): Promise<void> {
+    const text = formatOrderMessage(order, shop.name);
     const body = JSON.stringify({ chat_id: this.#chatId, text, disable_web_page_preview: true });
 
     for (let attempt = 0; ; attempt += 1) {
@@ -52,7 +51,7 @@ export class TelegramNotifier implements SellerNotifier {
           | { ok?: boolean; description?: string; parameters?: { retry_after?: number } }
           | undefined;
         if (res.ok && json?.ok) {
-          log.info('seller pinged on telegram', { order_id: order.id });
+          log.info('seller pinged on telegram', { order_id: order.id, shop_id: shop.id });
           return;
         }
         description = json?.description;
@@ -79,6 +78,6 @@ export function formatOrderMessage(order: Order, shopName: string): string {
   return [
     `New order for ${shopName}! ${items}, ${formatUsd(order.totalCents)}, paid via PayPal.`,
     `Order ${order.id}${order.captureId ? ` (PayPal capture ${order.captureId})` : ''}.`,
-    'Contact the buyer to arrange pickup or delivery.',
+    'Contact the buyer to arrange delivery, pickup or the booking.',
   ].join('\n');
 }

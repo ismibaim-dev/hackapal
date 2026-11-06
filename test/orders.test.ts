@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { ShopInfo } from '../src/catalog.js';
 import { createCatalog } from '../src/catalog.js';
+import { createPlatform } from '../src/platform.js';
 import { canTransition, OrderService, toOrderView, type SellerNotifier } from '../src/orders.js';
 import { InMemoryOrderStore, ORDER_STATUSES, type Order } from '../src/store.js';
 import { deferred, FakePayPal, paypalError } from './helpers.js';
@@ -344,5 +346,73 @@ describe('transitions and views', () => {
     const done = (await s.service.capture(order.id, 'return')).order;
     expect(toOrderView(done).approval_url).toBeUndefined();
     expect(toOrderView(done).status_message).toMatch(/^Paid\./);
+  });
+});
+
+describe('OrderService on the marketplace', () => {
+  function market() {
+    const paypal = new FakePayPal();
+    const pinged: { order: Order; shop: Readonly<ShopInfo> }[] = [];
+    const service = new OrderService({
+      platform: createPlatform(),
+      store: new InMemoryOrderStore(),
+      paypal,
+      publicBaseUrl: 'https://shop.example',
+      allowSimulatedDecline: true,
+      notifier: {
+        orderCompleted: async (order, shop) => {
+          pinged.push({ order, shop });
+        },
+      },
+    });
+    return { service, paypal, pinged };
+  }
+
+  it("brands each checkout with its shop and pays the shop's own account when it has one", async () => {
+    const { service, paypal } = market();
+    const cleaning = await service.createOrder({ items: [{ product_id: 'standard-clean-3h', quantity: 1 }] });
+    const baking = await service.createOrder({ items: [{ product_id: 'kuih-lapis', quantity: 1 }] }, { shopId: 'aunties-kitchen' });
+    expect(cleaning.ok && baking.ok).toBe(true);
+    expect(paypal.createCalls[0]).toMatchObject({ brandName: 'Kilat Home Cleaning', payeeEmail: 'johndblend@business.example.com' });
+    expect(paypal.createCalls[0]?.quote.totalCents).toBe(4500);
+    expect(paypal.createCalls[1]?.brandName).toBe("Auntie's Kitchen");
+    expect(paypal.createCalls[1]).not.toHaveProperty('payeeEmail');
+  });
+
+  it('refuses an unknown shop and a cart that mixes shops, without calling PayPal', async () => {
+    const { service, paypal } = market();
+    const unknown = await service.createOrder({ items: [{ product_id: 'eggs-30', quantity: 1 }] }, { shopId: 'nope' });
+    expect(unknown).toMatchObject({ ok: false, issues: [{ code: 'UNKNOWN_SHOP', shopId: 'nope' }] });
+    const mixed = await service.createOrder({
+      items: [
+        { product_id: 'eggs-30', quantity: 1 },
+        { product_id: 'sofa-shampoo', quantity: 1 },
+      ],
+    });
+    expect(mixed).toMatchObject({ ok: false, issues: [{ code: 'MIXED_SHOPS', shopIds: ['kampung-fresh-mart', 'kilat-home-cleaning'] }] });
+    expect(paypal.createCalls).toHaveLength(0);
+  });
+
+  it('tells the seller which shop was paid, and shows the shop on the order', async () => {
+    const { service, paypal, pinged } = market();
+    const result = await service.createOrder({ items: [{ product_id: 'fresh-santan-1kg', quantity: 2 }] });
+    if (!result.ok) throw new Error('create failed');
+    paypal.approve(result.order.paypalOrderId);
+    const done = (await service.capture(result.order.id, 'return')).order;
+    expect(done.status).toBe('COMPLETED');
+    expect(pinged.map((p) => p.shop.id)).toEqual(['kampung-fresh-mart']);
+    expect(service.view(done).shop).toEqual({ shop_id: 'kampung-fresh-mart', name: 'Kampung Fresh Mart' });
+    const santan = (await service.listProducts('kampung-fresh-mart')).find((p) => p.id === 'fresh-santan-1kg');
+    expect(santan?.stock).toBe(18);
+  });
+
+  it('lists and restocks products across shops by product id', async () => {
+    const { service } = market();
+    expect(await service.listProducts('nope')).toEqual([]);
+    expect((await service.listProducts()).length).toBe(18);
+    expect(await service.setStock({ 'eggs-30': 60, 'choc-chip-cookies': 50 })).toEqual({ ok: true });
+    const all = await service.listProducts();
+    expect(all.find((p) => p.id === 'eggs-30')).toMatchObject({ shopId: 'kampung-fresh-mart', stock: 60 });
+    expect(all.find((p) => p.id === 'choc-chip-cookies')).toMatchObject({ shopId: 'aunties-kitchen', stock: 50 });
   });
 });

@@ -16,20 +16,32 @@ export interface ShopInfo {
   id: string;
   name: string;
   description: string;
+  /** What kind of seller this is, e.g. "Home bakery". Helps agents pick a shop. */
+  category: string;
+  /** Where the seller operates (pickup, delivery or service area). */
+  area: string;
   /** How the buyer gets their order; there is no shipping step at checkout. */
   fulfilment: string;
   currency: Currency;
+  /**
+   * The seller's PayPal account (option B, design decision 16). Orders for this shop name it
+   * as purchase_units[0].payee, so PayPal pays the seller directly; the platform never holds
+   * the money. Omitted: the account that owns our REST app receives it.
+   */
+  payeeEmail?: string;
 }
 
 export interface ShopSeed extends ShopInfo {
   products: readonly Product[];
 }
 
-/** The demo seller. Hardcoded for the spike; prices are the single source of truth. */
+/** Demo sellers. Defined in code for the hackathon; prices here are the single source of truth. */
 export const AUNTIES_KITCHEN: Readonly<ShopSeed> = Object.freeze({
   id: 'aunties-kitchen',
   name: "Auntie's Kitchen",
   description: 'A home baker selling cookies, traditional kuih and cakes, baked to order.',
+  category: 'Home bakery',
+  area: 'Shah Alam, Selangor',
   fulfilment:
     'Baked to order. After payment the seller contacts the buyer to arrange pickup or local delivery.',
   currency: 'USD',
@@ -100,6 +112,49 @@ export const AUNTIES_KITCHEN: Readonly<ShopSeed> = Object.freeze({
     },
   ]),
 });
+
+/** A neighbourhood grocer. Its payments go to a second sandbox merchant account. */
+export const KAMPUNG_FRESH_MART: Readonly<ShopSeed> = Object.freeze({
+  id: 'kampung-fresh-mart',
+  name: 'Kampung Fresh Mart',
+  description: 'A neighbourhood grocer delivering daily essentials and fresh produce.',
+  category: 'Groceries',
+  area: 'Shah Alam, Selangor',
+  fulfilment:
+    'Same-day delivery within 5 km, or pickup at the shop. After payment the grocer confirms the delivery time.',
+  currency: 'USD',
+  payeeEmail: 'johndblend@business.example.com',
+  products: Object.freeze([
+    { id: 'eggs-30', name: 'Grade A eggs', description: 'Fresh grade A chicken eggs from a local farm. Tray of 30.', unit: 'tray of 30', priceCents: 550, stock: 40 },
+    { id: 'jasmine-rice-5kg', name: 'Jasmine rice', description: 'Fragrant long-grain jasmine rice. 5 kg bag.', unit: '5 kg bag', priceCents: 900, stock: 30 },
+    { id: 'whole-chicken', name: 'Fresh whole chicken', description: 'Fresh whole chicken, about 1.5 kg, cleaned and ready to cook.', unit: 'about 1.5 kg', priceCents: 800, stock: 20 },
+    { id: 'veg-bundle', name: 'Kampung vegetable bundle', description: 'Kangkung, bayam and sawi picked this morning. About 1.5 kg in total.', unit: 'bundle', priceCents: 400, stock: 25 },
+    { id: 'cooking-oil-2l', name: 'Cooking oil', description: 'Refined palm cooking oil. 2 litre bottle.', unit: '2 L bottle', priceCents: 600, stock: 30 },
+    { id: 'fresh-santan-1kg', name: 'Fresh santan', description: 'Coconut milk squeezed fresh the same day. 1 kg pack.', unit: '1 kg pack', priceCents: 350, stock: 20 },
+  ]),
+});
+
+/** A home-cleaning service. Each "unit" is one booked visit; stock is open slots this week. */
+export const KILAT_HOME_CLEANING: Readonly<ShopSeed> = Object.freeze({
+  id: 'kilat-home-cleaning',
+  name: 'Kilat Home Cleaning',
+  description: 'Vetted home cleaners for apartments and terrace houses. All supplies brought along.',
+  category: 'Home cleaning',
+  area: 'Petaling Jaya and Shah Alam, Selangor',
+  fulfilment:
+    'Each unit is one booked visit, and stock is the number of open slots this week. After payment the team contacts the buyer to confirm the date, time and address.',
+  currency: 'USD',
+  payeeEmail: 'johndblend@business.example.com',
+  products: Object.freeze([
+    { id: 'standard-clean-3h', name: 'Standard home clean', description: 'One cleaner for 3 hours: dusting, mopping, kitchen and bathrooms.', unit: '1 visit, 3 hours', priceCents: 4500, stock: 12 },
+    { id: 'deep-clean-6h', name: 'Deep clean', description: 'Two cleaners for 6 hours, including inside cabinets, windows and grout.', unit: '1 visit, 6 hours', priceCents: 12000, stock: 6 },
+    { id: 'move-out-clean', name: 'Move-in or move-out clean', description: 'Full clean of an empty unit up to 1,200 sq ft, ready for handover.', unit: '1 visit', priceCents: 15000, stock: 4 },
+    { id: 'sofa-shampoo', name: 'Sofa shampoo', description: 'Fabric sofa shampoo and vacuum, up to a 3-seater.', unit: '1 sofa', priceCents: 4000, stock: 10 },
+  ]),
+});
+
+/** Every shop on the platform, in the order agents see them. */
+export const SHOPS: readonly Readonly<ShopSeed>[] = Object.freeze([AUNTIES_KITCHEN, KAMPUNG_FRESH_MART, KILAT_HOME_CLEANING]);
 
 export interface StockResult {
   remaining: number;

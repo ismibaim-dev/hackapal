@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AUNTIES_KITCHEN } from '../src/catalog.js';
 import type { Order } from '../src/store.js';
 import { formatOrderMessage, TelegramNotifier } from '../src/telegram.js';
 import { fakeFetch, jsonResponse } from './helpers.js';
@@ -34,7 +35,6 @@ function notifier(handler: Parameters<typeof fakeFetch>[0]) {
   const n = new TelegramNotifier({
     botToken: TOKEN,
     chatId: '-100123',
-    shopName: "Auntie's Kitchen",
     fetch: f,
     sleep: async (ms) => {
       sleeps.push(ms);
@@ -48,7 +48,7 @@ describe('formatOrderMessage', () => {
     expect(formatOrderMessage(order, "Auntie's Kitchen")).toBe(
       "New order for Auntie's Kitchen! 2 x Chocolate chip cookies, 1 x Kuih lapis, $20.00, paid via PayPal.\n" +
         'Order ord_zp6ht17jmjzp (PayPal capture 0MM61912RS3958306).\n' +
-        'Contact the buyer to arrange pickup or delivery.',
+        'Contact the buyer to arrange delivery, pickup or the booking.',
     );
   });
 });
@@ -56,7 +56,7 @@ describe('formatOrderMessage', () => {
 describe('TelegramNotifier', () => {
   it('posts sendMessage to the configured chat as plain text', async () => {
     const { n, calls } = notifier(() => jsonResponse(200, { ok: true, result: { message_id: 1 } }));
-    await n.orderCompleted(order);
+    await n.orderCompleted(order, AUNTIES_KITCHEN);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe(`https://api.telegram.org/bot${TOKEN}/sendMessage`);
     const body = JSON.parse(String(calls[0]!.init.body));
@@ -70,7 +70,7 @@ describe('TelegramNotifier', () => {
         ? jsonResponse(429, { ok: false, error_code: 429, description: 'Too Many Requests', parameters: { retry_after: 3 } })
         : jsonResponse(200, { ok: true }),
     );
-    await n.orderCompleted(order);
+    await n.orderCompleted(order, AUNTIES_KITCHEN);
     expect(calls).toHaveLength(2);
     expect(sleeps).toEqual([3000]);
   });
@@ -79,7 +79,7 @@ describe('TelegramNotifier', () => {
     process.env.LOG_LEVEL = 'warn';
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { n, calls } = notifier(() => jsonResponse(400, { ok: false, error_code: 400, description: 'Bad Request: chat not found' }));
-    await expect(n.orderCompleted(order)).resolves.toBeUndefined();
+    await expect(n.orderCompleted(order, AUNTIES_KITCHEN)).resolves.toBeUndefined();
     expect(calls).toHaveLength(1);
     const logged = errors.mock.calls.map((c) => String(c[0])).join('\n');
     expect(logged).toContain('chat not found');
@@ -90,7 +90,7 @@ describe('TelegramNotifier', () => {
     const { n, calls } = notifier(() => {
       throw new TypeError('fetch failed');
     });
-    await expect(n.orderCompleted(order)).resolves.toBeUndefined();
+    await expect(n.orderCompleted(order, AUNTIES_KITCHEN)).resolves.toBeUndefined();
     expect(calls).toHaveLength(3);
   });
 });

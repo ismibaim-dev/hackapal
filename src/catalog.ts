@@ -113,7 +113,11 @@ export const AUNTIES_KITCHEN: Readonly<ShopSeed> = Object.freeze({
   ]),
 });
 
-/** A neighbourhood grocer. Its payments go to a second sandbox merchant account. */
+/**
+ * A neighbourhood grocer with its own payee setting. Note: johndblend@business.example.com turned out
+ * to be the account that owns our REST app (BUILD_LOG M2), so until a second sandbox merchant
+ * exists this pays the same account as Auntie's Kitchen.
+ */
 export const KAMPUNG_FRESH_MART: Readonly<ShopSeed> = Object.freeze({
   id: 'kampung-fresh-mart',
   name: 'Kampung Fresh Mart',

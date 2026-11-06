@@ -1,6 +1,6 @@
 # hackapal
 
-**Agent-ready micro-stores:** small sellers with no website get a shop that AI assistants can browse and buy from over MCP, with PayPal handling the money. The demo marketplace has three sellers: a home bakery, a neighbourhood grocer and a home-cleaning service. Each one is paid into its own PayPal account.
+**Agent-ready micro-stores:** small sellers with no website get a shop that AI assistants can browse and buy from over MCP, with PayPal handling the money. The demo marketplace has three sellers: a home bakery, a neighbourhood grocer and a home-cleaning service. Each shop can be paid into its own PayPal account.
 
 > Built for the PayPal AI Hackathon on Devpost. **Live on PayPal sandbox** at https://hackapal.onrender.com. Every end-to-end check passes, with evidence (order ids, capture ids, verified webhooks) in [docs/BUILD_LOG.md](docs/BUILD_LOG.md).
 
@@ -15,7 +15,7 @@ The demo runs on PayPal **sandbox**: no real money moves. It takes about five mi
 5. **Ask Claude "Is it paid?"** It checks with `get_order_status` and only says paid once the status is `COMPLETED`.
 
 **What to look for:**
-- **One marketplace, many sellers.** Every order belongs to one shop, and the PayPal order names that seller's own PayPal account as the `payee`, so the platform never holds the money. The grocer and the cleaner use a second sandbox merchant account. If you ask for a cart that mixes shops, Claude is told to make one order per shop.
+- **One marketplace, many sellers.** Every order belongs to one shop, and the PayPal order can name that seller's own PayPal account as the `payee`, so the platform never holds the money. If you ask for a cart that mixes shops, Claude is told to make one order per shop.
 - **The model can't set prices.** `create_order` takes product ids and quantities only, and the server prices the cart from its own catalog. Try asking Claude to give you a discount.
 - **Only the human pays.** Claude hands over a link and never claims payment until PayPal confirms the capture.
 - **Stock counts down** only after payment, exactly once per order, even when PayPal's webhook and the return page both report the payment.
@@ -63,7 +63,7 @@ sequenceDiagram
     AI->>Buyer: "Paid"
 ```
 
-What's built: a marketplace of three demo shops (Auntie's Kitchen, Kampung Fresh Mart, Kilat Home Cleaning), each paid into its own PayPal account; server-side pricing in integer cents; the PayPal money path (Orders v2 create and capture, return and cancel pages, verified webhooks, decline recovery); the MCP endpoints (`/mcp` for the marketplace with four tools, `/s/<shop_id>/mcp` for one shop); orders and stock persisted in Supabase; an API key on the internal API with rate limits on the public storefront; and the Telegram seller ping.
+What's built: a marketplace of three demo shops (Auntie's Kitchen, Kampung Fresh Mart, Kilat Home Cleaning), each of which can be paid into its own PayPal account; server-side pricing in integer cents; the PayPal money path (Orders v2 create and capture, return and cancel pages, verified webhooks, decline recovery); the MCP endpoints (`/mcp` for the marketplace with four tools, `/s/<shop_id>/mcp` for one shop); orders and stock persisted in Supabase; an API key on the internal API with rate limits on the public storefront; and the Telegram seller ping.
 
 ## Run locally
 

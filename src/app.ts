@@ -8,6 +8,7 @@ import type { OrderService } from './orders.js';
 import type { PayPalGateway } from './paypal.js';
 import { PayPalHttpError } from './paypal-http.js';
 import { paypalRoutes } from './paypal-routes.js';
+import { renderDirectory } from './pages.js';
 
 export interface AppDeps {
   config: AppConfig;
@@ -43,8 +44,25 @@ export function createApp({ config, orders, paypal, mcpLimits }: AppDeps): Expre
       stockStore: config.supabase ? 'supabase' : 'memory',
       apiKeyConfigured: Boolean(config.apiKey),
       sellerPing: config.telegram ? 'telegram' : 'off',
+      shops: orders ? orders.listShops().map((s) => s.id) : [],
     });
   });
+
+  if (orders) {
+    // Front page: the marketplace and each shop's own MCP link. Static per deploy.
+    app.get('/', (_req, res) => {
+      const base = config.publicBaseUrl;
+      const shops = orders.listShops().map((s) => ({
+        name: s.name,
+        category: s.category,
+        area: s.area,
+        description: s.description,
+        products: orders.platform.catalog(s.id)?.productIds().length ?? 0,
+        mcpUrl: `${base}/s/${s.id}/mcp`,
+      }));
+      res.set('Cache-Control', 'public, max-age=300').type('html').send(renderDirectory({ marketplaceMcpUrl: `${base}/mcp`, shops }));
+    });
+  }
 
   if (orders && paypal) {
     app.use(paypalRoutes({ orders, paypal, webhookId: config.paypal.webhookId }));

@@ -47,6 +47,12 @@ export interface CreateOrderInput {
   brandName: string;
   returnUrl: string;
   cancelUrl: string;
+  /**
+   * Seller's PayPal account (option B, design decision 16): when set, the order's
+   * purchase_units[0].payee routes the captured funds straight to that merchant instead of
+   * the API caller. Omitted: funds go to the account that owns our REST app.
+   */
+  payeeEmail?: string;
 }
 
 export interface CaptureOptions {
@@ -312,13 +318,14 @@ export class PayPalClient implements PayPalGateway {
   }
 }
 
-export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancelUrl }: CreateOrderInput): OrderRequest {
+export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancelUrl, payeeEmail }: CreateOrderInput): OrderRequest {
   const currencyCode = quote.currency;
   return {
     intent: CheckoutPaymentIntent.Capture,
     purchaseUnits: [
       {
         customId: orderId,
+        ...(payeeEmail ? { payee: { emailAddress: payeeEmail } } : {}),
         description: `${brandName} order ${orderId}`.slice(0, 127),
         amount: {
           currencyCode,

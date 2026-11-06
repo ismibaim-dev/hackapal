@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Catalog, StockResult } from './catalog.js';
+import type { StockResult } from './catalog.js';
+import type { Inventory } from './platform.js';
 
 /**
  * Live stock levels, separate from the catalog's product definitions and prices
@@ -25,12 +26,12 @@ export interface StockTakeResult extends StockResult {
   applied: boolean;
 }
 
-/** In-memory stock on the catalog itself. Lost on restart; used when Supabase isn't configured. */
+/** In-memory stock on the catalog(s) themselves. Lost on restart; used when Supabase isn't configured. */
 export class CatalogStockStore implements StockStore {
-  readonly #catalog: Catalog;
+  readonly #catalog: Inventory;
   readonly #taken = new Map<string, StockResult>();
 
-  constructor(catalog: Catalog) {
+  constructor(catalog: Inventory) {
     this.#catalog = catalog;
   }
 
@@ -68,10 +69,10 @@ export class StockStoreError extends Error {
  */
 export class SupabaseStockStore implements StockStore {
   readonly #db: SupabaseClient;
-  readonly #catalog: Catalog;
+  readonly #catalog: Inventory;
   #seeded: Promise<void> | undefined;
 
-  constructor(db: SupabaseClient, catalog: Catalog) {
+  constructor(db: SupabaseClient, catalog: Inventory) {
     this.#db = db;
     this.#catalog = catalog;
   }

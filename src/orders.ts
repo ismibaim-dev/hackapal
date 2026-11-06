@@ -1,8 +1,9 @@
-import type { Catalog, Product } from './catalog.js';
+import type { Catalog, ShopInfo } from './catalog.js';
 import { log } from './log.js';
 import { formatUsd } from './money.js';
 import type { PayPalGateway, PayPalOrderSummary } from './paypal.js';
 import { PayPalHttpError } from './paypal-http.js';
+import { platformFromCatalogs, type Platform, type ShopProduct } from './platform.js';
 import { priceCart, type CartInput, type PricingIssue, type Quote } from './pricing.js';
 import { CatalogStockStore, type StockStore } from './stock.js';
 import { FINAL_STATUSES, newOrderId, type Order, type OrderStatus, type OrderStore } from './store.js';
@@ -12,7 +13,8 @@ import { FINAL_STATUSES, newOrderId, type Order, type OrderStatus, type OrderSto
  * /api/orders endpoints and the MCP tools, so they can't drift apart.
  *
  * Invariants:
- * - Prices come from the catalog via priceCart, never from the caller.
+ * - Prices come from the shop's catalog via priceCart, never from the caller.
+ * - One order belongs to one shop: its brand name and PayPal payee come from that shop.
  * - One capture call per order at a time (single-flight); its PayPal-Request-Id is
  *   capture-<orderId>-<attempt>, and the attempt goes up after every definitive
  *   rejection (4xx), so a later capture never replays a cached error.
@@ -64,17 +66,31 @@ export interface CaptureResult {
   order: Order;
 }
 
-export type CreateOrderResult = { ok: true; order: Order; quote: Quote } | { ok: false; issues: PricingIssue[] };
+/** Why an order could not be created. Pricing issues, plus which shop it belongs to. */
+export type OrderIssue =
+  | PricingIssue
+  | { code: 'UNKNOWN_SHOP'; shopId: string; message: string }
+  | { code: 'MIXED_SHOPS'; shopIds: string[]; message: string };
 
-/** Told once per order, when it moves to COMPLETED. Phase 5 plugs Telegram in here. */
+export type CreateOrderResult = { ok: true; order: Order; quote: Quote; shop: Readonly<ShopInfo> } | { ok: false; issues: OrderIssue[] };
+
+/** Told once per order, when it moves to COMPLETED. */
 export interface SellerNotifier {
-  orderCompleted(order: Order): Promise<void>;
+  orderCompleted(order: Order, shop: Readonly<ShopInfo>): Promise<void>;
 }
 
-export interface OrderServiceOptions {
-  catalog: Catalog;
+export type OrderServiceOptions = (
+  | {
+      /** The shops. */
+      platform: Platform;
+    }
+  | {
+      /** A single shop (tests and single-seller setups). */
+      catalog: Catalog;
+    }
+) & {
   store: OrderStore;
-  /** Live stock. Defaults to in-memory stock on the catalog. */
+  /** Live stock. Defaults to in-memory stock on the catalogs. */
   stock?: StockStore;
   paypal: PayPalGateway;
   publicBaseUrl: string;
@@ -109,7 +125,7 @@ export interface WebhookRecord {
 export const MAX_STOCK = 1000;
 
 export class OrderService {
-  readonly #catalog: Catalog;
+  readonly #platform: Platform;
   readonly #stock: StockStore;
   readonly #store: OrderStore;
   readonly #paypal: PayPalGateway;
@@ -123,8 +139,8 @@ export class OrderService {
   readonly #webhookLog = new Map<string, WebhookRecord[]>();
 
   constructor(options: OrderServiceOptions) {
-    this.#catalog = options.catalog;
-    this.#stock = options.stock ?? new CatalogStockStore(options.catalog);
+    this.#platform = 'platform' in options ? options.platform : platformFromCatalogs([options.catalog]);
+    this.#stock = options.stock ?? new CatalogStockStore(this.#platform.inventory);
     this.#store = options.store;
     this.#paypal = options.paypal;
     this.#baseUrl = options.publicBaseUrl;
@@ -132,18 +148,40 @@ export class OrderService {
     this.#notifier = options.notifier;
   }
 
-  get catalog(): Catalog {
-    return this.#catalog;
+  get platform(): Platform {
+    return this.#platform;
+  }
+
+  listShops(): Readonly<ShopInfo>[] {
+    return this.#platform.shops();
+  }
+
+  shop(shopId: string): Readonly<ShopInfo> | undefined {
+    return this.#platform.shop(shopId);
+  }
+
+  /** The shop an order belongs to, from its items (every line of an order is from one shop). */
+  shopForOrder(order: Order): Readonly<ShopInfo> | undefined {
+    for (const item of order.items) {
+      const shop = this.#platform.shopOfProduct(item.productId);
+      if (shop) return shop;
+    }
+    return undefined;
+  }
+
+  /** What agents and scripts see for an order, with its shop. */
+  view(order: Order): OrderView {
+    return toOrderView(order, this.shopForOrder(order));
   }
 
   /**
-   * Seller restock: set absolute stock levels. Every id must be a catalog product and every
-   * level a whole number from 0 to MAX_STOCK; otherwise nothing is changed.
+   * Seller restock: set absolute stock levels. Every id must be a product of some shop and
+   * every level a whole number from 0 to MAX_STOCK; otherwise nothing is changed.
    */
   async setStock(levels: Record<string, number>): Promise<{ ok: true } | { ok: false; errors: string[] }> {
     const errors: string[] = [];
     for (const [productId, stock] of Object.entries(levels)) {
-      if (!this.#catalog.getProduct(productId)) errors.push(`Unknown product_id "${productId}".`);
+      if (!this.#platform.inventory.getProduct(productId)) errors.push(`Unknown product_id "${productId}".`);
       if (!Number.isSafeInteger(stock) || stock < 0 || stock > MAX_STOCK) {
         errors.push(`Stock for "${productId}" must be a whole number from 0 to ${MAX_STOCK} (got ${stock}).`);
       }
@@ -155,24 +193,40 @@ export class OrderService {
     return { ok: true };
   }
 
-  /** Catalog products with live stock levels (for list_products). */
-  async listProducts(): Promise<Product[]> {
+  /** Products with live stock levels: one shop's, or every shop's. Unknown shop: none. */
+  async listProducts(shopId?: string): Promise<ShopProduct[]> {
+    const shops = shopId === undefined ? this.#platform.shops() : [this.#platform.shop(shopId)].filter((s) => s !== undefined);
     const levels = await this.#stock.levels();
-    return this.#catalog.listProducts().map((p) => ({ ...p, stock: levels.get(p.id) ?? 0 }));
+    return shops.flatMap((shop) =>
+      (this.#platform.catalog(shop.id)?.listProducts() ?? []).map((p) => ({ ...p, shopId: shop.id, stock: levels.get(p.id) ?? 0 })),
+    );
   }
 
-  async createOrder(input: CartInput, options: { simulateDecline?: boolean } = {}): Promise<CreateOrderResult> {
-    const priced = priceCart(this.#catalog, input, await this.#stock.levels());
-    if (!priced.ok) return priced;
+  /**
+   * Price and create an order for one shop. The shop is `shopId` when given, otherwise the
+   * shop that sells the items. A cart can't mix shops: each seller gets paid separately.
+   */
+  async createOrder(
+    input: CartInput,
+    options: { shopId?: string; simulateDecline?: boolean } = {},
+  ): Promise<CreateOrderResult> {
+    const resolved = this.#resolveShop(input, options.shopId);
+    if (!resolved.ok) return resolved;
+    const { catalog } = resolved;
+    const shop = catalog.shop;
+
+    const priced = priceCart(catalog, input, await this.#stock.levels());
+    if (!priced.ok) return { ok: false, issues: priced.issues.map((issue) => this.#explainForeignProduct(issue, shop)) };
     const { quote } = priced;
 
     const id = newOrderId();
     const paypalOrder = await this.#paypal.createOrder({
       orderId: id,
       quote,
-      brandName: this.#catalog.shop.name,
+      brandName: shop.name,
       returnUrl: `${this.#baseUrl}/paypal/return`,
       cancelUrl: `${this.#baseUrl}/paypal/cancel`,
+      ...(shop.payeeEmail ? { payeeEmail: shop.payeeEmail } : {}),
     });
     if (!paypalOrder.approvalUrl) {
       throw new Error(`PayPal order ${paypalOrder.id} has no payer-action or approve link`);
@@ -188,11 +242,54 @@ export class OrderService {
     });
     log.info('order created', {
       order_id: id,
+      shop_id: shop.id,
       paypal_order_id: paypalOrder.id,
       total: formatUsd(order.totalCents),
       simulate_decline: order.simulateDecline,
     });
-    return { ok: true, order, quote };
+    return { ok: true, order, quote, shop };
+  }
+
+  #resolveShop(
+    input: CartInput,
+    shopId: string | undefined,
+  ): { ok: true; catalog: Catalog } | { ok: false; issues: OrderIssue[] } {
+    if (shopId !== undefined) {
+      const catalog = this.#platform.catalog(shopId);
+      if (catalog) return { ok: true, catalog };
+      const valid = this.#platform.shops().map((s) => s.id).join(', ');
+      return { ok: false, issues: [{ code: 'UNKNOWN_SHOP', shopId, message: `Unknown shop_id "${shopId}". Valid ids: ${valid}.` }] };
+    }
+    const shopIds = [
+      ...new Set(input.items.flatMap((item) => this.#platform.shopOfProduct(item.product_id.trim())?.id ?? [])),
+    ];
+    if (shopIds.length > 1) {
+      const names = shopIds.map((id) => this.#platform.shop(id)?.name ?? id).join(' and ');
+      return {
+        ok: false,
+        issues: [
+          {
+            code: 'MIXED_SHOPS',
+            shopIds,
+            message: `These items come from ${names}. Each shop is paid separately, so create one order per shop.`,
+          },
+        ],
+      };
+    }
+    // No known product at all: price against the first shop so the buyer sees which ids are wrong.
+    const catalog = this.#platform.catalog(shopIds[0] ?? this.#platform.shops()[0]!.id)!;
+    return { ok: true, catalog };
+  }
+
+  /** A product another shop sells gets a clearer message than "unknown". */
+  #explainForeignProduct(issue: PricingIssue, shop: Readonly<ShopInfo>): OrderIssue {
+    if (issue.code !== 'UNKNOWN_PRODUCT') return issue;
+    const owner = this.#platform.shopOfProduct(issue.productId);
+    if (!owner || owner.id === shop.id) return issue;
+    return {
+      ...issue,
+      message: `"${issue.productId}" is sold by ${owner.name} (shop_id ${owner.id}), not ${shop.name}. Create a separate order for it.`,
+    };
   }
 
   get(orderId: string): Promise<Order | undefined> {
@@ -436,8 +533,9 @@ export class OrderService {
       }
     }
     log.info('order completed', { order_id: orderId, capture_id: captureId, total: formatUsd(result.order.totalCents) });
-    if (this.#notifier) {
-      this.#notifier.orderCompleted(result.order).catch((err: unknown) => {
+    const shop = this.shopForOrder(result.order);
+    if (this.#notifier && shop) {
+      this.#notifier.orderCompleted(result.order, shop).catch((err: unknown) => {
         log.warn('seller notification failed', { order_id: orderId, err });
       });
     }
@@ -504,6 +602,8 @@ function statusOutcome(status: OrderStatus): CaptureOutcome {
 /** What agents and scripts see. Amounts as display strings and cents; no internals. */
 export interface OrderView {
   order_id: string;
+  /** The seller. Absent only if the order's products no longer exist in any shop. */
+  shop?: { shop_id: string; name: string };
   status: OrderStatus;
   status_message: string;
   /** Present while the buyer still has something to do in PayPal. */
@@ -522,7 +622,7 @@ const STATUS_MESSAGES: Record<OrderStatus, string> = {
   CREATED: 'Waiting for the buyer to open the PayPal link and approve. Not paid yet.',
   APPROVED: 'The buyer approved in PayPal; the payment is being captured. Not paid yet.',
   PAYMENT_PENDING: 'PayPal accepted the payment but is holding the funds for review. Not paid yet; check again later.',
-  COMPLETED: 'Paid. The payment was captured. The seller will contact the buyer about pickup or delivery.',
+  COMPLETED: 'Paid. The payment was captured. The seller will contact the buyer to arrange delivery, pickup or the booking.',
   NEEDS_NEW_FUNDING:
     'The payment method was declined. The buyer must open the same PayPal link again and choose another way to pay. Not paid yet.',
   CANCELLED:
@@ -532,9 +632,10 @@ const STATUS_MESSAGES: Record<OrderStatus, string> = {
 
 const NEEDS_BUYER: ReadonlySet<OrderStatus> = new Set(['CREATED', 'NEEDS_NEW_FUNDING', 'CANCELLED']);
 
-export function toOrderView(order: Order): OrderView {
+export function toOrderView(order: Order, shop?: Readonly<ShopInfo>): OrderView {
   return {
     order_id: order.id,
+    ...(shop ? { shop: { shop_id: shop.id, name: shop.name } } : {}),
     status: order.status,
     status_message: STATUS_MESSAGES[order.status],
     ...(NEEDS_BUYER.has(order.status) ? { approval_url: order.approvalUrl } : {}),

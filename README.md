@@ -1,6 +1,6 @@
 # hackapal
 
-**An agent-ready micro-store:** a small seller with no website gets a shop that AI assistants can browse and buy from over MCP, with PayPal handling the money.
+**Agent-ready micro-stores:** small sellers with no website get a shop that AI assistants can browse and buy from over MCP, with PayPal handling the money. The demo marketplace has three sellers: a home bakery, a neighbourhood grocer and a home-cleaning service. Each seller is paid straight into its own PayPal account.
 
 > Built for the PayPal AI Hackathon on Devpost. **Live on PayPal sandbox** at https://hackapal.onrender.com. Every end-to-end check passes, with evidence (order ids, capture ids, verified webhooks) in [docs/BUILD_LOG.md](docs/BUILD_LOG.md).
 
@@ -9,12 +9,13 @@
 The demo runs on PayPal **sandbox**: no real money moves. It takes about five minutes.
 
 1. **Wake the shop.** It's on free hosting that sleeps when idle. Open https://hackapal.onrender.com/health and wait for `"status":"ok"`; the first load can take up to a minute.
-2. **Connect Claude to the shop.** In claude.ai go to **Settings > Connectors > Add custom connector**. Use the name `Auntie's Kitchen` and the URL `https://hackapal.onrender.com/mcp`, with no authentication. Start a new chat and make sure the connector is switched on for it.
-3. **Shop by talking.** Try "What does Auntie's Kitchen sell?", then "Buy 2 boxes of chocolate chip cookies." Claude reads the catalog, confirms the items and the $12.00 total with you, creates the order and hands you a PayPal link.
+2. **Connect Claude to the marketplace.** In claude.ai go to **Settings > Connectors > Add custom connector**. Use the name `hackapal` and the URL `https://hackapal.onrender.com/mcp`, with no authentication. Start a new chat and make sure the connector is switched on for it. (Each shop also has its own link, such as `https://hackapal.onrender.com/s/aunties-kitchen/mcp`. https://hackapal.onrender.com lists them all.)
+3. **Shop by talking.** Try "What shops are on hackapal?", then "Buy 2 boxes of chocolate chip cookies from Auntie's Kitchen." Claude reads the catalog, confirms the items and the $12.00 total with you, creates the order and hands you a PayPal link. You can also try "Book a standard home clean" or "I need eggs and rice from the grocer".
 4. **Pay as the buyer.** Open the link and log in with the sandbox buyer account: _[credentials are in the Devpost submission's testing instructions]_. Click **Pay Now**. You land on "Payment complete, you can go back to your assistant."
 5. **Ask Claude "Is it paid?"** It checks with `get_order_status` and only says paid once the status is `COMPLETED`.
 
 **What to look for:**
+- **One marketplace, many sellers.** Every order belongs to one shop, and the PayPal order names that seller's own PayPal account as the `payee`, so the platform never holds the money. Kampung Fresh Mart and Kilat Home Cleaning are paid into a second sandbox merchant account; a sandbox capture confirmed the money lands there and not in ours (build log, M2). If you ask for a cart that mixes shops, Claude is told to make one order per shop.
 - **The model can't set prices.** `create_order` takes product ids and quantities only, and the server prices the cart from its own catalog. Try asking Claude to give you a discount.
 - **Only the human pays.** Claude hands over a link and never claims payment until PayPal confirms the capture.
 - **Stock counts down** only after payment, exactly once per order, even when PayPal's webhook and the return page both report the payment.
@@ -30,8 +31,8 @@ The demo runs on PayPal **sandbox**: no real money moves. It takes about five mi
 
 ## How it works
 
-1. An AI assistant (Claude, via a claude.ai custom connector) calls our MCP tools: `list_products`, then `create_order`.
-2. The server prices the cart from its own catalog (never from the model), creates a PayPal order with Orders v2 and hands back the approval link.
+1. An AI assistant (Claude, via a claude.ai custom connector) calls our MCP tools: `list_shops`, `list_products`, then `create_order`.
+2. The server prices the cart from that shop's catalog (never from the model), creates a PayPal order with Orders v2 that names the shop as brand and its PayPal account as payee, and hands back the approval link.
 3. The buyer opens the link and approves in PayPal. Only the human can pay.
 4. The server captures the payment, either on PayPal's return redirect or from the verified `CHECKOUT.ORDER.APPROVED` webhook if the buyer closed the tab early.
 5. The seller gets a ping, and the assistant checks `get_order_status`. It may only say "paid" once the status is `COMPLETED`.
@@ -62,7 +63,7 @@ sequenceDiagram
     AI->>Buyer: "Paid"
 ```
 
-What's built: the demo shop "Auntie's Kitchen"; server-side pricing in integer cents; the PayPal money path (Orders v2 create and capture, return and cancel pages, verified webhooks, decline recovery); the MCP endpoint with three tools; orders and stock persisted in Supabase; an API key on the internal API with rate limits on the public storefront; and the Telegram seller ping.
+What's built: a marketplace of three demo shops (Auntie's Kitchen, Kampung Fresh Mart, Kilat Home Cleaning), each paid into its own PayPal account; server-side pricing in integer cents; the PayPal money path (Orders v2 create and capture, return and cancel pages, verified webhooks, decline recovery); the MCP endpoints (`/mcp` for the marketplace with four tools, `/s/<shop_id>/mcp` for one shop); orders and stock persisted in Supabase; an API key on the internal API with rate limits on the public storefront; and the Telegram seller ping.
 
 ## Run locally
 
@@ -113,9 +114,10 @@ npm test
 | `npm run build`, `npm start` | Compile to `dist/` and run it. This is what Render does. |
 | `npm test` | Unit tests (vitest). |
 | `npm run typecheck` | Strict type check of `src`, `scripts` and `test`. |
-| `npm run money-path -- --base-url <url> [--simulate-decline] [--api-key <key>]` | Test 1: creates an order on our server, prints the PayPal link for the sandbox buyer, follows the status to `COMPLETED` and waits for the verified webhook. |
-| `npm run mcp-smoke -- <url>/mcp` | Test 2a: connects to our MCP endpoint, lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
-| `npm run stock -- --base-url <url> [--set <product-id>=<n> ...]` | Shows live stock, or sets absolute levels (seller restock). Needs the server's `API_KEY` (`--api-key` or `HACKAPAL_API_KEY`). |
+| `npm run money-path -- --base-url <url> [--product <id>] [--simulate-decline] [--api-key <key>]` | Test 1: creates an order on our server (cookies by default; any product of any shop with `--product`), prints the PayPal link for the sandbox buyer, follows the status to `COMPLETED` and waits for the verified webhook. |
+| `npm run mcp-smoke -- <url>/mcp [product-id]` | Test 2a: connects to an MCP endpoint (marketplace or `/s/<shop_id>/mcp`), lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
+| `npm run stock -- --base-url <url> [--shop <shop_id>] [--set <product-id>=<n> ...]` | Shows live stock, or sets absolute levels (seller restock). Product ids are unique across shops. Needs the server's `API_KEY` (`--api-key` or `HACKAPAL_API_KEY`). |
+| `npm run probe-payee -- --payee <email> \| --capture <id> [--wait] \| --show <id>` | Option B probe: creates, captures or shows a sandbox order whose payee is another merchant account. |
 | `npm run probe-paypal-mcp` | Lists PayPal's sandbox MCP tools with and without `x-feature-flags: commerce:true` (result in the build log). |
 
 ## Project layout
@@ -127,7 +129,8 @@ src/
   app.ts      Express routes
   server.ts   entry point
   money.ts    integer-cents helpers
-  catalog.ts  the demo shop and its products
+  catalog.ts  the demo shops and their products (prices, payee)
+  platform.ts the shop registry: which shop sells which product
   pricing.ts  server-side cart pricing and validation
   store.ts    order store interface + in-memory implementation
   supabase-store.ts  the same store on Supabase Postgres (public.orders)
@@ -140,8 +143,8 @@ src/
   paypal-http.ts  fetch wrapper: request ids, retries, debug_id logging
   paypal-routes.ts  /paypal/return, /paypal/cancel, /webhooks/paypal
   api-routes.ts     /api/orders (internal API for scripts)
-  pages.ts    the small HTML pages buyers see after PayPal
-  mcp.ts      POST /mcp: the MCP server (list_products, create_order, get_order_status)
+  pages.ts    the shop directory at / and the small pages buyers see after PayPal
+  mcp.ts      POST /mcp (marketplace) and /s/<shop_id>/mcp (one shop): the MCP servers
 test/         vitest unit tests
 scripts/      manual end-to-end scripts (money path, MCP smoke, PayPal MCP probe)
 docs/         build log and evidence
@@ -151,6 +154,7 @@ docs/         build log and evidence
 
 - Sandbox only: any `PAYPAL_ENV` other than `sandbox` stops the server at startup.
 - Prices come only from the server catalog, and all money math is in integer cents.
+- One order, one shop: the PayPal order's brand and payee come from the shop the server resolved, never from the caller. Sellers' PayPal accounts are never shown to agents.
 - Credentials come only from environment variables, and logs redact secret-looking keys.
 - Orders v2 only (no `v1/payments`, NVP or SOAP), through `@paypal/paypal-server-sdk`.
 - A `PayPal-Request-Id` on every POST (`create-<order>`, `capture-<order>-<attempt>`), one cached OAuth token, retries with backoff on 429/5xx/network errors only, and the PayPal `debug_id` logged on every error.

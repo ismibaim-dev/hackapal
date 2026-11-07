@@ -52,6 +52,8 @@ export interface AppConfig {
     chatId: string;
     /** Each shop's own seller chat, by shop id. */
     shopChats: Record<string, string>;
+    /** Each shop's own bot token, by shop id. Only for shops that also have their own chat. */
+    shopBots: Record<string, string>;
   };
   /** Non-fatal problems worth logging at startup. Never contains secret values. */
   warnings: string[];
@@ -96,8 +98,38 @@ export function parseShopChats(raw: string | undefined, warnings: string[]): Rec
   return chats;
 }
 
+const SHOP_BOT_PREFIX = 'TELEGRAM_BOT_TOKEN_';
+const SHOP_BOT_VAR = /^TELEGRAM_BOT_TOKEN_([A-Z0-9]+(?:_[A-Z0-9]+)*)$/;
+
+/**
+ * Each shop's own bot, from TELEGRAM_BOT_TOKEN_<SHOP>, where <SHOP> is the shop id in capitals
+ * with "-" as "_" (kampung-fresh-mart -> TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART). One variable
+ * per shop, so each token is its own secret. A bot is only used together with that shop's own
+ * chat (it isn't a member of anyone else's), so one without a chat is dropped with a warning.
+ * Warnings name the variable, never the token.
+ */
+export function parseShopBots(
+  env: Record<string, string>,
+  shopChats: Record<string, string>,
+  warnings: string[],
+): Record<string, string> {
+  const bots: Record<string, string> = {};
+  for (const [name, token] of Object.entries(env)) {
+    const match = SHOP_BOT_VAR.exec(name);
+    if (!match) continue;
+    const shopId = name.slice(SHOP_BOT_PREFIX.length).toLowerCase().replaceAll('_', '-');
+    if (!shopChats[shopId]) {
+      warnings.push(`${name} is set but TELEGRAM_SHOP_CHATS has no chat for "${shopId}"; that shop uses the default bot and chat.`);
+      continue;
+    }
+    bots[shopId] = token;
+  }
+  return bots;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
-  const parsed = EnvSchema.safeParse(withoutBlanks(env));
+  const clean = withoutBlanks(env);
+  const parsed = EnvSchema.safeParse(clean);
   if (!parsed.success) {
     // zod issues carry the path and message but not the input, so secrets can't leak here.
     throw new ConfigError(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`));
@@ -115,6 +147,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     warnings.push('Telegram needs both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID; seller pings are off.');
   }
   const shopChats = parseShopChats(e.TELEGRAM_SHOP_CHATS, warnings);
+  const shopBots = parseShopBots(clean, shopChats, warnings);
+  if (!(e.TELEGRAM_BOT_TOKEN && e.TELEGRAM_CHAT_ID) && (Object.keys(shopChats).length > 0 || Object.keys(shopBots).length > 0)) {
+    warnings.push('Per-shop Telegram settings need the default TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID too; seller pings are off.');
+  }
 
   return {
     port: e.PORT,
@@ -130,7 +166,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       e.SUPABASE_URL && e.SUPABASE_SECRET_KEY ? { url: e.SUPABASE_URL, secretKey: e.SUPABASE_SECRET_KEY } : undefined,
     telegram:
       e.TELEGRAM_BOT_TOKEN && e.TELEGRAM_CHAT_ID
-        ? { botToken: e.TELEGRAM_BOT_TOKEN, chatId: e.TELEGRAM_CHAT_ID, shopChats }
+        ? { botToken: e.TELEGRAM_BOT_TOKEN, chatId: e.TELEGRAM_CHAT_ID, shopChats, shopBots }
         : undefined,
     warnings,
   };

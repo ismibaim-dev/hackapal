@@ -58,7 +58,7 @@ describe('loadConfig', () => {
 
   it('enables Telegram only when both values are present', () => {
     const config = loadConfig({ TELEGRAM_BOT_TOKEN: 'bot', TELEGRAM_CHAT_ID: '42' });
-    expect(config.telegram).toEqual({ botToken: 'bot', chatId: '42', shopChats: {} });
+    expect(config.telegram).toEqual({ botToken: 'bot', chatId: '42', shopChats: {}, shopBots: {} });
   });
 });
 
@@ -73,6 +73,7 @@ describe('TELEGRAM_SHOP_CHATS', () => {
       botToken: 'bot',
       chatId: '42',
       shopChats: { 'kampung-fresh-mart': '-1001234567890', 'kilat-home-cleaning': '@kilatorders' },
+      shopBots: {},
     });
     expect(config.warnings).toEqual([]);
   });
@@ -86,5 +87,40 @@ describe('TELEGRAM_SHOP_CHATS', () => {
     expect(config.telegram?.shopChats).toEqual({ 'kampung-fresh-mart': '-100123' });
     expect(config.warnings).toHaveLength(3);
     expect(config.warnings.join(' ')).not.toContain('Bad Shop');
+  });
+});
+
+describe('per-shop Telegram bots', () => {
+  const base = { TELEGRAM_BOT_TOKEN: 'default-bot', TELEGRAM_CHAT_ID: '42' };
+
+  it('reads a bot per shop from TELEGRAM_BOT_TOKEN_<SHOP>, keyed by the shop id', () => {
+    const config = loadConfig({
+      ...base,
+      TELEGRAM_SHOP_CHATS: 'kampung-fresh-mart=-100111,kilat-home-cleaning=-100222',
+      TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART: 'grocer-bot',
+      TELEGRAM_BOT_TOKEN_KILAT_HOME_CLEANING: 'cleaner-bot',
+    });
+    expect(config.telegram?.shopBots).toEqual({ 'kampung-fresh-mart': 'grocer-bot', 'kilat-home-cleaning': 'cleaner-bot' });
+    expect(config.warnings).toEqual([]);
+  });
+
+  it("drops a shop's bot that has no chat of its own, and never puts a token in a warning", () => {
+    const config = loadConfig({ ...base, TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART: 'secret-grocer-token' });
+    expect(config.telegram?.shopBots).toEqual({});
+    expect(config.warnings).toHaveLength(1);
+    expect(config.warnings[0]).toContain('TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART');
+    expect(config.warnings[0]).not.toContain('secret-grocer-token');
+  });
+
+  it("doesn't mistake the default token for a shop's, and ignores blanks", () => {
+    const config = loadConfig({ ...base, TELEGRAM_SHOP_CHATS: 'kampung-fresh-mart=-100111', TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART: '   ' });
+    expect(config.telegram?.shopBots).toEqual({});
+    expect(config.warnings).toEqual([]);
+  });
+
+  it('turns pings off, with a warning, when only per-shop settings exist', () => {
+    const config = loadConfig({ TELEGRAM_SHOP_CHATS: 'kampung-fresh-mart=-100111', TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART: 'grocer-bot' });
+    expect(config.telegram).toBeUndefined();
+    expect(config.warnings.join(' ')).toContain('need the default TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
   });
 });

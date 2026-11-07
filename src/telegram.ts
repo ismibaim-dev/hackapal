@@ -9,8 +9,9 @@ import type { Order } from './store.js';
 /**
  * Seller ping on Telegram: one message per order, sent when its capture completes
  * (OrderService calls orderCompleted exactly once, on the move to COMPLETED).
- * Each shop's ping goes to that shop's own chat (TELEGRAM_SHOP_CHATS), or to the default
- * chat when the shop has none. The message names the shop and, when PayPal says, the buyer,
+ * Each shop's ping goes to that shop's own chat (TELEGRAM_SHOP_CHATS), sent by that shop's own
+ * bot when it has one (TELEGRAM_BOT_TOKEN_<SHOP>), or by the default bot to the default chat
+ * when the shop has none. The message names the shop and, when PayPal says, the buyer,
  * so the seller knows whom to contact. Buyer details are never logged.
  * Uses the Bot API's sendMessage as plain text (no parse_mode, so nothing in an order
  * can turn into markup). The bot token sits in the URL path, so the URL is never logged.
@@ -21,38 +22,57 @@ export interface TelegramNotifierOptions {
   chatId: string;
   /** Each shop's own chat, by shop id. */
   shopChats?: Readonly<Record<string, string>>;
+  /** Each shop's own bot token, by shop id. Used only for shops that have their own chat. */
+  shopBots?: Readonly<Record<string, string>>;
   fetch?: FetchLike;
   sleep?: (ms: number) => Promise<void>;
   /** Retries after the first attempt, for 429 and 5xx. */
   maxRetries?: number;
 }
 
+function sendMessageUrl(botToken: string): string {
+  return `https://api.telegram.org/bot${botToken}/sendMessage`;
+}
+
 export class TelegramNotifier implements SellerNotifier {
   readonly #url: string;
   readonly #chatId: string;
   readonly #shopChats: Readonly<Record<string, string>>;
+  readonly #shopBots: Readonly<Record<string, string>>;
   readonly #fetch: FetchLike;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #maxRetries: number;
 
   constructor(options: TelegramNotifierOptions) {
-    this.#url = `https://api.telegram.org/bot${options.botToken}/sendMessage`;
+    this.#url = sendMessageUrl(options.botToken);
     this.#chatId = options.chatId;
     this.#shopChats = { ...options.shopChats };
+    this.#shopBots = { ...options.shopBots };
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#maxRetries = options.maxRetries ?? 2;
   }
 
-  /** Where a shop's pings go. */
-  chatFor(shopId: string): { chatId: string; ownChat: boolean } {
-    const own = this.#shopChats[shopId];
-    return own ? { chatId: own, ownChat: true } : { chatId: this.#chatId, ownChat: false };
+  /**
+   * Where a shop's pings go and which bot sends them. A shop's own bot is only used with its
+   * own chat: it isn't a member of the default chat.
+   */
+  #routeFor(shopId: string): { url: string; chatId: string; ownChat: boolean; ownBot: boolean } {
+    const chatId = this.#shopChats[shopId];
+    if (!chatId) return { url: this.#url, chatId: this.#chatId, ownChat: false, ownBot: false };
+    const token = this.#shopBots[shopId];
+    return { url: token ? sendMessageUrl(token) : this.#url, chatId, ownChat: true, ownBot: Boolean(token) };
+  }
+
+  /** The routing for a shop, without the bot token. */
+  chatFor(shopId: string): { chatId: string; ownChat: boolean; ownBot: boolean } {
+    const { chatId, ownChat, ownBot } = this.#routeFor(shopId);
+    return { chatId, ownChat, ownBot };
   }
 
   async orderCompleted(order: Order, shop: Readonly<ShopInfo>, buyer?: Buyer): Promise<void> {
     const text = formatOrderMessage(order, shop.name, buyer);
-    const { chatId, ownChat } = this.chatFor(shop.id);
+    const { url, chatId, ownChat, ownBot } = this.#routeFor(shop.id);
     const body = JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true });
 
     for (let attempt = 0; ; attempt += 1) {
@@ -60,13 +80,13 @@ export class TelegramNotifier implements SellerNotifier {
       let description: string | undefined;
       let retryAfterSeconds: number | undefined;
       try {
-        const res = await this.#fetch(this.#url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+        const res = await this.#fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
         status = res.status;
         const json = (await res.json().catch(() => undefined)) as
           | { ok?: boolean; description?: string; parameters?: { retry_after?: number } }
           | undefined;
         if (res.ok && json?.ok) {
-          log.info('seller pinged on telegram', { order_id: order.id, shop_id: shop.id, shop_chat: ownChat, buyer_known: Boolean(buyer) });
+          log.info('seller pinged on telegram', { order_id: order.id, shop_id: shop.id, shop_chat: ownChat, shop_bot: ownBot, buyer_known: Boolean(buyer) });
           return;
         }
         description = json?.description;

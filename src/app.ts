@@ -46,6 +46,8 @@ export function createApp({ config, orders, paypal, mcpLimits }: AppDeps): Expre
       sellerPing: config.telegram ? 'telegram' : 'off',
       // Shops whose pings go to their own chat (ids only); the rest use the default chat.
       sellerChats: orders && config.telegram ? orders.listShops().map((s) => s.id).filter((id) => config.telegram!.shopChats[id]) : [],
+      // Shops that send from their own bot (ids only).
+      sellerBots: orders && config.telegram ? orders.listShops().map((s) => s.id).filter((id) => config.telegram!.shopBots[id]) : [],
       shops: orders ? orders.listShops().map((s) => s.id) : [],
     });
   });

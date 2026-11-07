@@ -69,7 +69,50 @@ describe('TelegramNotifier', () => {
     const chats = f.calls.map((c) => JSON.parse(String(c.init.body)).chat_id);
     expect(chats).toEqual(['-100777', '-100123']);
     expect(JSON.parse(String(f.calls[0]!.init.body)).text).toContain('New order for Kampung Fresh Mart!');
-    expect(n.chatFor('kilat-home-cleaning')).toEqual({ chatId: '-100123', ownChat: false });
+    expect(n.chatFor('kilat-home-cleaning')).toEqual({ chatId: '-100123', ownChat: false, ownBot: false });
+  });
+
+  it("sends from a shop's own bot to its own chat, and falls back to the default bot otherwise", async () => {
+    const f = fakeFetch(() => jsonResponse(200, { ok: true }));
+    const n = new TelegramNotifier({
+      botToken: TOKEN,
+      chatId: '-100123',
+      shopChats: { 'kampung-fresh-mart': '-100777', 'kilat-home-cleaning': '-100888' },
+      // The cleaner has a chat but no bot of its own; the stray bot for auntie has no chat, so it is never used.
+      shopBots: { 'kampung-fresh-mart': '777:grocer-bot', 'aunties-kitchen': '999:stray-bot' },
+      fetch: f,
+    });
+    await n.orderCompleted(order, KAMPUNG_FRESH_MART);
+    await n.orderCompleted(order, { ...KAMPUNG_FRESH_MART, id: 'kilat-home-cleaning', name: 'Kilat Home Cleaning' });
+    await n.orderCompleted(order, AUNTIES_KITCHEN);
+    expect(f.calls.map((c) => c.url)).toEqual([
+      'https://api.telegram.org/bot777:grocer-bot/sendMessage',
+      `https://api.telegram.org/bot${TOKEN}/sendMessage`,
+      `https://api.telegram.org/bot${TOKEN}/sendMessage`,
+    ]);
+    expect(f.calls.map((c) => JSON.parse(String(c.init.body)).chat_id)).toEqual(['-100777', '-100888', '-100123']);
+    expect(n.chatFor('kampung-fresh-mart')).toEqual({ chatId: '-100777', ownChat: true, ownBot: true });
+    expect(n.chatFor('kilat-home-cleaning')).toEqual({ chatId: '-100888', ownChat: true, ownBot: false });
+    expect(n.chatFor('aunties-kitchen')).toEqual({ chatId: '-100123', ownChat: false, ownBot: false });
+  });
+
+  it("never logs any shop's bot token", async () => {
+    process.env.LOG_LEVEL = 'info';
+    const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const n = new TelegramNotifier({
+      botToken: TOKEN,
+      chatId: '-100123',
+      shopChats: { 'kampung-fresh-mart': '-100777' },
+      shopBots: { 'kampung-fresh-mart': '777:grocer-secret-token' },
+      fetch: fakeFetch(() => jsonResponse(400, { ok: false, error_code: 400, description: 'Bad Request: chat not found' })),
+      sleep: async () => undefined,
+    });
+    await n.orderCompleted(order, KAMPUNG_FRESH_MART);
+    const logged = [...out.mock.calls, ...errors.mock.calls].map((c) => String(c[0])).join('\n');
+    expect(logged).toContain('telegram ping failed');
+    expect(logged).not.toContain('grocer-secret-token');
+    expect(logged).not.toContain(TOKEN);
   });
 
   it('never logs the buyer', async () => {

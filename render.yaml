@@ -49,3 +49,9 @@ services:
       # Each shop's own seller chat: shop-id=chat-id,shop-id=chat-id (find ids with npm run telegram-chats).
       - key: TELEGRAM_SHOP_CHATS
         sync: false
+      # Each shop's own bot, if it has one: TELEGRAM_BOT_TOKEN_<SHOP-ID IN CAPITALS, - AS _>.
+      # Only used together with that shop's chat in TELEGRAM_SHOP_CHATS.
+      - key: TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN_KILAT_HOME_CLEANING
+        sync: false

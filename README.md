@@ -105,6 +105,7 @@ npm test
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | persistent orders | Supabase project URL and secret key (server only). Without both, orders and stock live in memory and reset on restart. Schema: `supabase/migrations/`. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | optional | Seller ping on new paid orders. Both or neither. `TELEGRAM_CHAT_ID` is the default chat. |
 | `TELEGRAM_SHOP_CHATS` | optional | Each shop's own seller chat: `shop-id=chat-id,shop-id=chat-id`. A shop's orders ping only its chat; shops not listed use `TELEGRAM_CHAT_ID`. Find the ids with `npm run telegram-chats`. |
+| `TELEGRAM_BOT_TOKEN_<SHOP>` | optional | A shop's own bot, e.g. `TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART` (shop id in capitals, `-` as `_`). That shop's pings come from its bot, into its chat from `TELEGRAM_SHOP_CHATS`. Without it the shop's chat is served by the default bot. |
 | `LOG_LEVEL` | optional | `debug`, `info` (default), `warn`, `error` or `silent`. |
 
 ## Scripts
@@ -119,7 +120,7 @@ npm test
 | `npm run mcp-smoke -- <url>/mcp [product-id]` | Test 2a: connects to an MCP endpoint (marketplace or `/s/<shop_id>/mcp`), lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
 | `npm run stock -- --base-url <url> [--shop <shop_id>] [--set <product-id>=<n> ...]` | Shows live stock, or sets absolute levels (seller restock). Product ids are unique across shops. Needs the server's `API_KEY` (`--api-key` or `HACKAPAL_API_KEY`). |
 | `npm run probe-payee -- --payee <email> \| --capture <id> [--wait] \| --show <id>` | Option B probe: creates, captures or shows a sandbox order whose payee is another merchant account. |
-| `npm run telegram-chats` | Lists the chats the seller-ping bot can see, with their ids, for `TELEGRAM_SHOP_CHATS`. Reads `TELEGRAM_BOT_TOKEN` from your env or `.env`; never prints it. |
+| `npm run telegram-chats [-- --shop <shop_id>]` | Lists the chats one seller-ping bot can see, with their ids, for `TELEGRAM_SHOP_CHATS`. Reads that bot's token (`TELEGRAM_BOT_TOKEN`, or `TELEGRAM_BOT_TOKEN_<SHOP>` with `--shop`) from your env or `.env`; never prints it. |
 | `npm run probe-paypal-mcp` | Lists PayPal's sandbox MCP tools with and without `x-feature-flags: commerce:true` (result in the build log). |
 
 ## Project layout

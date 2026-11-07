@@ -1,12 +1,18 @@
-// Lists the Telegram chats our seller-ping bot can see, with their chat ids, so you can fill
-// TELEGRAM_SHOP_CHATS on Render without pasting the bot token anywhere.
+// Lists the Telegram chats one of our seller-ping bots can see, with their chat ids, so you can
+// fill TELEGRAM_SHOP_CHATS on Render without pasting a bot token anywhere.
 //
-//   npm run telegram-chats
+//   npm run telegram-chats                                  (the default bot)
+//   npm run telegram-chats -- --shop kampung-fresh-mart     (that shop's own bot)
 //
-// Needs TELEGRAM_BOT_TOKEN in your environment or in .env (never committed). Add the bot to
-// each shop's group first, then send /start in the group. Telegram keeps updates for 24 hours.
-// Prints chat ids and titles only; never the token.
+// Each run reads one token from your environment or .env (never committed):
+// TELEGRAM_BOT_TOKEN, or TELEGRAM_BOT_TOKEN_<SHOP> with the shop id in capitals and "_" for "-"
+// (TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART). A bot only sees its own chats, so run it once per
+// bot. Add the bot to the shop's group first, then send /start in the group. Telegram keeps
+// updates for 24 hours. Prints chat ids and titles only; never the token.
+import { parseArgs } from 'node:util';
 import { loadDotEnv } from '../src/config.js';
+
+const { values } = parseArgs({ options: { shop: { type: 'string' } } });
 
 type Chat = { id: number; type: string; title?: string; username?: string; first_name?: string };
 type Update = {
@@ -17,8 +23,11 @@ type Update = {
 
 async function main(): Promise<void> {
   loadDotEnv();
-  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-  if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not set: copy it from Render > hackapal > Environment into your local .env');
+  const shop = values.shop?.trim();
+  if (shop && !/^[a-z0-9-]{1,64}$/.test(shop)) throw new Error(`"${shop}" is not a shop id (lowercase letters, digits and hyphens)`);
+  const varName = shop ? `TELEGRAM_BOT_TOKEN_${shop.toUpperCase().replaceAll('-', '_')}` : 'TELEGRAM_BOT_TOKEN';
+  const token = process.env[varName]?.trim();
+  if (!token) throw new Error(`${varName} is not set: put that bot's token (from BotFather) in your local .env as ${varName}=...`);
 
   const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?allowed_updates=${encodeURIComponent('["message","channel_post","my_chat_member"]')}`);
   const body = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string; result?: Update[] };
@@ -47,7 +56,7 @@ async function main(): Promise<void> {
     const name = chat.title ?? (chat.username ? `@${chat.username}` : chat.first_name ?? '(no name)');
     console.log(`  ${String(chat.id).padEnd(16)} ${chat.type.padEnd(11)} ${name}${note ? `  (${note})` : ''}`);
   }
-  console.log('\nThen set on Render: TELEGRAM_SHOP_CHATS=kampung-fresh-mart=<id>,kilat-home-cleaning=<id>');
+  console.log(`\nChat ids for ${shop ? `the ${shop} bot` : 'the default bot'}. Put the right one in Render's TELEGRAM_SHOP_CHATS (shop-id=chat-id, comma separated).`);
 }
 
 main().catch((err: unknown) => {

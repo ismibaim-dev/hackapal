@@ -19,7 +19,7 @@ The demo runs on PayPal **sandbox**: no real money moves. It takes about five mi
 - **The model can't set prices.** `create_order` takes product ids and quantities only, and the server prices the cart from its own catalog. Try asking Claude to give you a discount.
 - **Only the human pays.** Claude hands over a link and never claims payment until PayPal confirms the capture.
 - **Stock counts down** only after payment, exactly once per order, even when PayPal's webhook and the return page both report the payment.
-- **The seller gets a Telegram ping** for each paid order, and a declined card is recovered by sending the buyer back to PayPal to choose another way to pay. Both are shown in the demo video, because they happen on the seller's phone and through sandbox negative testing.
+- **Only the right seller gets a Telegram ping** for each paid order (each shop has its own chat), with the buyer's name and email from PayPal so they know whom to contact, and a declined card is recovered by sending the buyer back to PayPal to choose another way to pay. Both are shown in the demo video, because they happen on the seller's phone and through sandbox negative testing.
 
 **Without claude.ai:** any MCP client that speaks Streamable HTTP works. For example, `npx @modelcontextprotocol/inspector` with transport "Streamable HTTP" and the URL above, or `npm run mcp-smoke -- https://hackapal.onrender.com/mcp` from a clone of this repo.
 
@@ -103,7 +103,8 @@ npm test
 | `PORT` | optional | Defaults to 3000. Render sets it for you. |
 | `API_KEY` | `/api/*` | 24+ random characters. Sent as `Authorization: Bearer <key>` (or `X-API-Key`). Without it `/api` answers 503. Render generates one. |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | persistent orders | Supabase project URL and secret key (server only). Without both, orders and stock live in memory and reset on restart. Schema: `supabase/migrations/`. |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | optional | Seller ping on new paid orders. Both or neither. |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | optional | Seller ping on new paid orders. Both or neither. `TELEGRAM_CHAT_ID` is the default chat. |
+| `TELEGRAM_SHOP_CHATS` | optional | Each shop's own seller chat: `shop-id=chat-id,shop-id=chat-id`. A shop's orders ping only its chat; shops not listed use `TELEGRAM_CHAT_ID`. Find the ids with `npm run telegram-chats`. |
 | `LOG_LEVEL` | optional | `debug`, `info` (default), `warn`, `error` or `silent`. |
 
 ## Scripts
@@ -118,6 +119,7 @@ npm test
 | `npm run mcp-smoke -- <url>/mcp [product-id]` | Test 2a: connects to an MCP endpoint (marketplace or `/s/<shop_id>/mcp`), lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
 | `npm run stock -- --base-url <url> [--shop <shop_id>] [--set <product-id>=<n> ...]` | Shows live stock, or sets absolute levels (seller restock). Product ids are unique across shops. Needs the server's `API_KEY` (`--api-key` or `HACKAPAL_API_KEY`). |
 | `npm run probe-payee -- --payee <email> \| --capture <id> [--wait] \| --show <id>` | Option B probe: creates, captures or shows a sandbox order whose payee is another merchant account. |
+| `npm run telegram-chats` | Lists the chats the seller-ping bot can see, with their ids, for `TELEGRAM_SHOP_CHATS`. Reads `TELEGRAM_BOT_TOKEN` from your env or `.env`; never prints it. |
 | `npm run probe-paypal-mcp` | Lists PayPal's sandbox MCP tools with and without `x-feature-flags: commerce:true` (result in the build log). |
 
 ## Project layout

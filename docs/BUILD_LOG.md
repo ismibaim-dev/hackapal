@@ -16,6 +16,7 @@ Evidence log for the Day 1 risk spike. Every check is **PASS**, **FAIL** or **PE
 | M1 | Marketplace: three shops; each order is branded with its shop and names the shop's PayPal account as `payee` | **PASS** (local, real sandbox) | 2026-11-06 ~08:05 UTC, local server against the PayPal sandbox: `mcp-smoke` on `/s/kampung-fresh-mart/mcp` created `ord_0x79jhev2rky` / PayPal `7Y821307BC895403P`, $11.00; `probe-payee --show` returned `payee.email_address: johndblend@business.example.com`, `display_data.brand_name: Kampung Fresh Mart` (debug_id `f2498178aa5ce`). On `/mcp` (marketplace), `list_shops` was among the four tools and `standard-clean-3h` made `ord_w0b30ps4ga27` for Kilat Home Cleaning, $90.00. Not deployed yet. |
 | M2 | Option B: capture succeeds and the money lands in the *payee's* account, not ours | **PASS** | 2026-11-06, `probe-payee` with payee `sb-cjqou53656464@business.example.com` (second sandbox business account, created by Baim): PayPal order `88159236960482412` created (debug_id `ca562b3ec5fb4`), approved by Baim as the sandbox buyer at 08:51:59 UTC, captured: `1FY56658LL402935B`, `COMPLETED`, gross $6.00, PayPal fee $0.79, net $5.21 (debug_id `f2203694e058a`). `GET /v2/payments/captures/1FY56658LL402935B` shows payee merchant **`YTJXJV3Y82YMJ`**, not the app's own `W9JBVPFWNL5ZU`. Our REST app created and captured the order; the money went to the other merchant. Earlier probe for contrast: `8FM75136AH1854239` / capture `02N240464B6537356` named `johndblend@business.example.com`, which turned out to be the app's own account (the S5 capture `93K55850CR203070G`, made with no payee, shows the same `W9JBVPFWNL5ZU`), so it proved nothing. Webhooks still come to **our** app for an order paid to another merchant: our webhook-events list has `CHECKOUT.ORDER.APPROVED` `WH-4UM33691YA939121V-0M057464D2825552S` (08:51:54) and `PAYMENT.CAPTURE.COMPLETED` `WH-2F329009AR466704N-7U809551N2158793S` (08:52:05) for this order. (The live server doesn't know probe orders, so it would have ignored them as unknown; a shop order through `money-path --product eggs-30` after the deploy is the end-to-end check.) |
 | S5 | Telegram seller ping on a completed capture (optional) | **PASS** | 2026-11-02, Render commit `dce72b1`, `/health` `sellerPing: telegram`. Order `ord_jet2p1jq5qyk` (1 x Chocolate chip cookies, $6.00, PayPal `8NH10827F2507581S`) was created through the live claude.ai-style MCP connector and paid by Baim in sandbox. `COMPLETED` at 11:02:54 UTC, capture `93K55850CR203070G`; cookies stock 22 -> 21 with one movement row. Baim confirmed the Telegram message arrived (screenshot is Baim's). |
+| S6 | Each shop's paid order pings only that shop's Telegram chat, with the buyer's name and email from PayPal | **PENDING** | Code and tests done (2026-11-07). Needs Baim: one Telegram group per shop with the bot added, `TELEGRAM_SHOP_CHATS` on Render, then a paid grocer order that pings only the grocer's group and names the buyer. |
 
 ## Sponsor tools used
 
@@ -34,9 +35,12 @@ Record every real use: date, tool, what was asked, what it said, and which code 
   - `mcp-tools.md` confirms `search_product`, `create_cart` and `checkout_cart` are remote-only and need `x-feature-flags: commerce:true`. -> Used by the P4 probe.
   - `agentic-commerce.md`: Agent Ready uses Braintree delegated payment tokens and is early-access. -> Confirms the wedge: we use plain Orders v2 with a human approving in PayPal, no delegated tokens.
   - **Gap:** the skill doesn't cover `PayPal-Mock-Response` negative testing; that comes from PayPal's REST docs plus ContextMatic (below).
+- **2026-11-07: buyer details for the seller ping.** Searched the vendored skill for how to read the payer after capture (`payer`, `payment_source.paypal`, `email_address`): nothing beyond the Fastlane `payer-action` redirect. **Gap**, so the field choice came from ContextMatic and the SDK's own types (below).
 - **2026-11-06: paying each seller (option B).** Re-read `SKILL.md` and `references/checkout.md` before adding `payee` to the order request. `SKILL.md` lists "PayPal Commerce Platform (multi-party marketplaces)" under **Out of Scope** and points to the Commerce Platform docs. -> We don't use Commerce Platform (partner onboarding, `platform_fees`) for the hackathon. We use the plain Orders v2 `purchase_units[].payee`, which the checkout reference's request shape allows, with no platform fee (design decision 16).
 
 ### APIMatic Context Plugin (ContextMatic)
+
+- **2026-11-07: who paid (seller ping).** `fetch_api(typescript, "paypal")`, then `model_search` for `Payer` (`emailAddress`, `payerId`, `name`, `phone`, ...) and `PaypalWalletResponse` (`emailAddress`, `name`, `accountId`, ...; it sits at `Order.paymentSource.paypal`). The installed SDK's `Order` type marks top-level `payer` as **deprecated** in favour of `payment_source.paypal`, and `Name` has `givenName` and `surname`. -> `summarize()` in `src/paypal.ts` reads the buyer from `paymentSource.paypal` and falls back to `payer`.
 
 - **2026-11-06: payee for option B (design decision 16).** `model_search` for `PayeeBase` showed the SDK model has `emailAddress` and `merchantId`, and the TypeScript field on `PurchaseUnitRequest` is `payee`. -> `src/paypal.ts` sends `payee: { emailAddress }` only when the shop has a payee. `model_search` for the capture models showed the capture carries `sellerReceivableBreakdown` (gross, PayPal fee, net) but no payee field; the payee is echoed on the order's purchase unit. -> `probe-payee` reads both when it checks where the money went. Two `ask` calls on "who receives the funds when payee is set" returned a tool error, so that question is answered by the live probe (M2), not by ContextMatic.
 
@@ -90,6 +94,13 @@ Added in session 2, while building Phase 1:
     - **Endpoints:** `/mcp` is the marketplace (`list_shops`, `list_products` with an optional `shop_id`, `create_order`, `get_order_status`). `/s/<shop_id>/mcp` is one shop's own link, without `list_shops`; it only answers for that shop's orders. `/` lists the shops and their links.
     - **Unchanged:** prices only from the server, request ids, retries, webhook verification and the status rules. Webhooks for every shop arrive at the same app, third-party payees included (confirmed in M2); the return page and `get_order_status` capture anyway, so a missing webhook can't strand a payment.
     - **One Telegram chat** for the whole demo; the message names the shop. Per-seller chats would come with onboarding.
+17. **Each order pings only its own seller, with the buyer's contact** (Baim, 2026-11-07: a shared chat for every shop is "kinda unprofessional"; chose "A plus buyer details").
+    - **One bot, one chat per shop.** `TELEGRAM_SHOP_CHATS=shop-id=chat-id,...` on Render; a shop not listed uses `TELEGRAM_CHAT_ID`. One bot can message any number of chats, so there is no bot per shop. Chat ids stay out of the public repo. A malformed entry is skipped with a warning, never a failed start; an unknown shop id is warned about at startup. `/health` lists which shops have their own chat (ids, never chat ids).
+    - **The demo needs groups:** one person has a single private chat with a bot, so each demo seller is a Telegram group with the bot in it. `npm run telegram-chats` lists the ids without the token leaving Baim's machine.
+    - **Buyer details:** the ping now names the buyer (name and email, from `payment_source.paypal`, falling back to the deprecated `payer`). Before this, "contact the buyer" gave the seller no way to do it. Taken from the capture response when the return page or reconciliation captures; when only the `PAYMENT.CAPTURE.COMPLETED` webhook completes the order (the capture carries no payer) we do one best-effort `GET` of the order. If that fails the seller is still pinged, and the message says to check PayPal.
+    - **Not stored, not logged.** The buyer is passed straight to the ping, so there is no schema change and no personal data in our database or logs (a test checks the logs). Agents never see it either: they already know the buyer.
+    - **Option B, self-service:** sellers connecting their own chat from a join link (`t.me/<bot>?start=<code>`) is the onboarding story for the write-up, not built.
+    - **Not done:** delivery addresses. PayPal's shipping is off (`NO_SHIPPING`); the grocer or cleaner gets the address by contacting the buyer. Turning shipping on per shop is a later option.
 
 Assumptions (change them if wrong):
 
@@ -238,11 +249,18 @@ Assumptions (change them if wrong):
 - **Deploy note:** on the first stock read after deploy, the 10 new products are seeded into `public.stock` with their starting stock; existing levels aren't touched.
 - **Tests:** 193 passing (18 new), 4 skipped (live Supabase).
 
+### Per-shop seller pings with buyer details (2026-11-07)
+
+- `TELEGRAM_SHOP_CHATS` routing, buyer name and email in the ping, best-effort buyer lookup for webhook-only completions, `npm run telegram-chats`, `/health` `sellerChats`. Design decision 17.
+- **Tests:** 203 passing (10 new), 4 skipped (live Supabase).
+- **Evidence:** S6 is pending Baim's Telegram groups and Render variable.
+
 ## Handoff (latest, 2026-11-06)
 
 1. Merge the marketplace PR; Render redeploys. Check `/health` lists three shops and that https://hackapal.onrender.com shows the directory.
 2. After the deploy, prove it through the shop itself: `npm run money-path -- --base-url https://hackapal.onrender.com --product eggs-30`, Baim approves, and the order should reach `COMPLETED` (the return page captures even if no webhook comes, see M2).
 3. Baim: restock Auntie's Kitchen with `npm run stock` if needed, rename the claude.ai connector to `hackapal`, and trim the PayPal webhook to the three handled events (finishing touch).
+3b. S6: Telegram group per shop with the bot, `npm run telegram-chats`, set `TELEGRAM_SHOP_CHATS` on Render, then a paid grocer order should ping only the grocer's group and name the buyer.
 4. Then: demo video, Devpost write-up.
 
 ## Handoff to session 3

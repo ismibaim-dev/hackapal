@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AUNTIES_KITCHEN } from '../src/catalog.js';
+import { AUNTIES_KITCHEN, KAMPUNG_FRESH_MART } from '../src/catalog.js';
 import type { Order } from '../src/store.js';
 import { formatOrderMessage, TelegramNotifier } from '../src/telegram.js';
 import { fakeFetch, jsonResponse } from './helpers.js';
@@ -45,15 +45,45 @@ function notifier(handler: Parameters<typeof fakeFetch>[0]) {
 
 describe('formatOrderMessage', () => {
   it('lists items, total and ids in plain text', () => {
-    expect(formatOrderMessage(order, "Auntie's Kitchen")).toBe(
+    expect(formatOrderMessage(order, "Auntie's Kitchen", { name: 'Siti Aminah', email: 'siti@personal.example.com' })).toBe(
       "New order for Auntie's Kitchen! 2 x Chocolate chip cookies, 1 x Kuih lapis, $20.00, paid via PayPal.\n" +
+        'Buyer: Siti Aminah, siti@personal.example.com\n' +
         'Order ord_zp6ht17jmjzp (PayPal capture 0MM61912RS3958306).\n' +
         'Contact the buyer to arrange delivery, pickup or the booking.',
     );
   });
+
+  it('says so when PayPal shared no buyer details', () => {
+    const text = formatOrderMessage(order, "Auntie's Kitchen");
+    expect(text).toContain('Buyer: PayPal did not share contact details');
+    expect(text).not.toContain('Contact the buyer');
+  });
 });
 
 describe('TelegramNotifier', () => {
+  it("sends each shop's order to that shop's own chat, and the rest to the default chat", async () => {
+    const f = fakeFetch(() => jsonResponse(200, { ok: true }));
+    const n = new TelegramNotifier({ botToken: TOKEN, chatId: '-100123', shopChats: { 'kampung-fresh-mart': '-100777' }, fetch: f });
+    await n.orderCompleted(order, KAMPUNG_FRESH_MART, { email: 'siti@personal.example.com' });
+    await n.orderCompleted(order, AUNTIES_KITCHEN);
+    const chats = f.calls.map((c) => JSON.parse(String(c.init.body)).chat_id);
+    expect(chats).toEqual(['-100777', '-100123']);
+    expect(JSON.parse(String(f.calls[0]!.init.body)).text).toContain('New order for Kampung Fresh Mart!');
+    expect(n.chatFor('kilat-home-cleaning')).toEqual({ chatId: '-100123', ownChat: false });
+  });
+
+  it('never logs the buyer', async () => {
+    process.env.LOG_LEVEL = 'info';
+    const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { n } = notifier(() => jsonResponse(200, { ok: true }));
+    await n.orderCompleted(order, AUNTIES_KITCHEN, { name: 'Siti Aminah', email: 'siti@personal.example.com' });
+    const logged = [...out.mock.calls, ...errors.mock.calls].map((c) => String(c[0])).join('\n');
+    expect(logged).toContain('seller pinged on telegram');
+    expect(logged).not.toContain('siti@');
+    expect(logged).not.toContain('Siti');
+  });
+
   it('posts sendMessage to the configured chat as plain text', async () => {
     const { n, calls } = notifier(() => jsonResponse(200, { ok: true, result: { message_id: 1 } }));
     await n.orderCompleted(order, AUNTIES_KITCHEN);

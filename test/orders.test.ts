@@ -4,7 +4,8 @@ import { createCatalog } from '../src/catalog.js';
 import { createPlatform } from '../src/platform.js';
 import { canTransition, OrderService, toOrderView, type SellerNotifier } from '../src/orders.js';
 import { InMemoryOrderStore, ORDER_STATUSES, type Order } from '../src/store.js';
-import { deferred, FakePayPal, paypalError } from './helpers.js';
+import type { Buyer } from '../src/paypal.js';
+import { deferred, eventually, FakePayPal, paypalError } from './helpers.js';
 
 const COOKIES = { items: [{ product_id: 'choc-chip-cookies', quantity: 2 }] };
 
@@ -352,7 +353,7 @@ describe('transitions and views', () => {
 describe('OrderService on the marketplace', () => {
   function market() {
     const paypal = new FakePayPal();
-    const pinged: { order: Order; shop: Readonly<ShopInfo> }[] = [];
+    const pinged: { order: Order; shop: Readonly<ShopInfo>; buyer: Buyer | undefined }[] = [];
     const service = new OrderService({
       platform: createPlatform(),
       store: new InMemoryOrderStore(),
@@ -360,8 +361,8 @@ describe('OrderService on the marketplace', () => {
       publicBaseUrl: 'https://shop.example',
       allowSimulatedDecline: true,
       notifier: {
-        orderCompleted: async (order, shop) => {
-          pinged.push({ order, shop });
+        orderCompleted: async (order, shop, buyer) => {
+          pinged.push({ order, shop, buyer });
         },
       },
     });
@@ -414,5 +415,68 @@ describe('OrderService on the marketplace', () => {
     const all = await service.listProducts();
     expect(all.find((p) => p.id === 'eggs-30')).toMatchObject({ shopId: 'kampung-fresh-mart', stock: 60 });
     expect(all.find((p) => p.id === 'choc-chip-cookies')).toMatchObject({ shopId: 'aunties-kitchen', stock: 50 });
+  });
+});
+
+describe('buyer details for the seller ping', () => {
+  function withPings() {
+    const paypal = new FakePayPal();
+    const pinged: { order: Order; buyer: Buyer | undefined }[] = [];
+    const service = new OrderService({
+      platform: createPlatform(),
+      store: new InMemoryOrderStore(),
+      paypal,
+      publicBaseUrl: 'https://shop.example',
+      allowSimulatedDecline: true,
+      notifier: {
+        orderCompleted: async (order, _shop, buyer) => {
+          pinged.push({ order, buyer });
+        },
+      },
+    });
+    const place = async () => {
+      const result = await service.createOrder({ items: [{ product_id: 'eggs-30', quantity: 1 }] });
+      if (!result.ok) throw new Error('create failed');
+      return result.order;
+    };
+    return { service, paypal, pinged, place };
+  }
+
+  it('passes the buyer from the capture response, with no extra PayPal call', async () => {
+    const { service, paypal, pinged, place } = withPings();
+    const order = await place();
+    paypal.approve(order.paypalOrderId);
+    await service.capture(order.id, 'return');
+    await eventually(() => pinged.length === 1);
+    expect(pinged[0]?.buyer).toEqual({ name: 'Siti Aminah', email: 'siti@personal.example.com' });
+    expect(paypal.getCalls).toBe(0);
+  });
+
+  it('looks the buyer up when only the PAYMENT.CAPTURE.COMPLETED webhook completed the order', async () => {
+    const { service, paypal, pinged, place } = withPings();
+    const order = await place();
+    paypal.approve(order.paypalOrderId);
+    await service.handleWebhookEvent({
+      id: 'WH-BUYER-1',
+      event_type: 'PAYMENT.CAPTURE.COMPLETED',
+      resource: { id: 'CAP-X', status: 'COMPLETED', custom_id: order.id, supplementary_data: { related_ids: { order_id: order.paypalOrderId } } },
+    });
+    await eventually(() => pinged.length === 1);
+    expect(pinged[0]?.buyer?.email).toBe('siti@personal.example.com');
+    expect(paypal.getCalls).toBe(1);
+  });
+
+  it('still pings the seller, without a buyer, when that lookup fails', async () => {
+    const { service, paypal, pinged, place } = withPings();
+    const order = await place();
+    paypal.getOrderError = paypalError(503, 'SERVICE_UNAVAILABLE');
+    await service.handleWebhookEvent({
+      id: 'WH-BUYER-2',
+      event_type: 'PAYMENT.CAPTURE.COMPLETED',
+      resource: { id: 'CAP-Y', status: 'COMPLETED', custom_id: order.id, supplementary_data: { related_ids: { order_id: order.paypalOrderId } } },
+    });
+    await eventually(() => pinged.length === 1);
+    expect(pinged[0]?.order.status).toBe('COMPLETED');
+    expect(pinged[0]?.buyer).toBeUndefined();
   });
 });

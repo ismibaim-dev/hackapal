@@ -58,6 +58,33 @@ describe('loadConfig', () => {
 
   it('enables Telegram only when both values are present', () => {
     const config = loadConfig({ TELEGRAM_BOT_TOKEN: 'bot', TELEGRAM_CHAT_ID: '42' });
-    expect(config.telegram).toEqual({ botToken: 'bot', chatId: '42' });
+    expect(config.telegram).toEqual({ botToken: 'bot', chatId: '42', shopChats: {} });
+  });
+});
+
+describe('TELEGRAM_SHOP_CHATS', () => {
+  it('maps shops to their own chats and keeps the default chat', () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: 'bot',
+      TELEGRAM_CHAT_ID: '42',
+      TELEGRAM_SHOP_CHATS: ' kampung-fresh-mart = -1001234567890 , kilat-home-cleaning=@kilatorders ',
+    });
+    expect(config.telegram).toEqual({
+      botToken: 'bot',
+      chatId: '42',
+      shopChats: { 'kampung-fresh-mart': '-1001234567890', 'kilat-home-cleaning': '@kilatorders' },
+    });
+    expect(config.warnings).toEqual([]);
+  });
+
+  it('skips malformed entries with a warning instead of refusing to start', () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: 'bot',
+      TELEGRAM_CHAT_ID: '42',
+      TELEGRAM_SHOP_CHATS: 'kampung-fresh-mart=-100123,Bad Shop=1,kilat-home-cleaning=abc,x=1=2',
+    });
+    expect(config.telegram?.shopChats).toEqual({ 'kampung-fresh-mart': '-100123' });
+    expect(config.warnings).toHaveLength(3);
+    expect(config.warnings.join(' ')).not.toContain('Bad Shop');
   });
 });

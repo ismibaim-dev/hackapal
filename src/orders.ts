@@ -1,7 +1,7 @@
 import type { Catalog, ShopInfo } from './catalog.js';
 import { log } from './log.js';
 import { formatUsd } from './money.js';
-import type { PayPalGateway, PayPalOrderSummary } from './paypal.js';
+import type { Buyer, PayPalGateway, PayPalOrderSummary } from './paypal.js';
 import { PayPalHttpError } from './paypal-http.js';
 import { platformFromCatalogs, type Platform, type ShopProduct } from './platform.js';
 import { priceCart, type CartInput, type PricingIssue, type Quote } from './pricing.js';
@@ -74,9 +74,9 @@ export type OrderIssue =
 
 export type CreateOrderResult = { ok: true; order: Order; quote: Quote; shop: Readonly<ShopInfo> } | { ok: false; issues: OrderIssue[] };
 
-/** Told once per order, when it moves to COMPLETED. */
+/** Told once per order, when it moves to COMPLETED. `buyer` is who paid, when PayPal says. */
 export interface SellerNotifier {
-  orderCompleted(order: Order, shop: Readonly<ShopInfo>): Promise<void>;
+  orderCompleted(order: Order, shop: Readonly<ShopInfo>, buyer?: Buyer): Promise<void>;
 }
 
 export type OrderServiceOptions = (
@@ -407,7 +407,7 @@ export class OrderService {
   async #applyCaptured(orderId: string, paypalOrder: PayPalOrderSummary): Promise<CaptureResult> {
     const capture = paypalOrder.capture;
     if (capture?.status === 'COMPLETED' || capture?.status === 'PARTIALLY_REFUNDED' || capture?.status === 'REFUNDED') {
-      const { order } = await this.#markCompleted(orderId, capture.id);
+      const { order } = await this.#markCompleted(orderId, capture.id, paypalOrder.buyer);
       return { outcome: order.status === 'COMPLETED' ? 'completed' : statusOutcome(order.status), order };
     }
     if (capture?.status === 'PENDING') {
@@ -514,7 +514,7 @@ export class OrderService {
     }
   }
 
-  async #markCompleted(orderId: string, captureId: string): Promise<{ order: Order; changed: boolean }> {
+  async #markCompleted(orderId: string, captureId: string, buyer?: Buyer): Promise<{ order: Order; changed: boolean }> {
     const result = await this.#transition(orderId, 'COMPLETED', { captureId });
     if (!result.changed) return result;
     for (const item of result.order.items) {
@@ -535,11 +535,30 @@ export class OrderService {
     log.info('order completed', { order_id: orderId, capture_id: captureId, total: formatUsd(result.order.totalCents) });
     const shop = this.shopForOrder(result.order);
     if (this.#notifier && shop) {
-      this.#notifier.orderCompleted(result.order, shop).catch((err: unknown) => {
+      const notifier = this.#notifier;
+      const order = result.order;
+      // Fire and forget: the seller ping never delays or fails the payment.
+      (async () => notifier.orderCompleted(order, shop, buyer ?? (await this.#buyerFor(order))))().catch((err: unknown) => {
         log.warn('seller notification failed', { order_id: orderId, err });
       });
     }
     return result;
+  }
+
+  /**
+   * Who paid, for the seller ping, when the completion came without it (the
+   * PAYMENT.CAPTURE.COMPLETED webhook carries the capture, not the payer). Best effort.
+   */
+  async #buyerFor(order: Order): Promise<Buyer | undefined> {
+    try {
+      return (await this.#paypal.getOrder(order.paypalOrderId)).buyer;
+    } catch (err) {
+      log.warn('could not read the buyer for the seller ping', {
+        order_id: order.id,
+        debug_id: err instanceof PayPalHttpError ? err.debugId : undefined,
+      });
+      return undefined;
+    }
   }
 
   /**

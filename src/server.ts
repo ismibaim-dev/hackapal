@@ -33,6 +33,9 @@ if (hasPayPalCredentials(config)) {
     ? new SupabaseStockStore(db, platform.inventory)
     : new CatalogStockStore(platform.inventory);
   if (!db) log.warn('SUPABASE_URL/SUPABASE_SECRET_KEY not set: orders and stock are kept in memory and lost on restart');
+  for (const shopId of Object.keys(config.telegram?.shopChats ?? {})) {
+    if (!platform.shop(shopId)) log.warn('TELEGRAM_SHOP_CHATS names an unknown shop; its entry is unused', { shop_id: shopId });
+  }
   deps.orders = new OrderService({
     platform,
     store,

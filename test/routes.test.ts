@@ -66,11 +66,21 @@ describe('GET /health', () => {
   });
 
   it('lists which shops have their own seller chat, never the chat ids', async () => {
-    const { base } = await start({ TELEGRAM_BOT_TOKEN: 'bot', TELEGRAM_CHAT_ID: '42', TELEGRAM_SHOP_CHATS: 'kampung-fresh-mart=-100777' });
+    const { base } = await start({
+      TELEGRAM_BOT_TOKEN: 'bot',
+      TELEGRAM_CHAT_ID: '42',
+      TELEGRAM_SHOP_CHATS: 'kampung-fresh-mart=-100777,kilat-home-cleaning=-100888',
+      TELEGRAM_BOT_TOKEN_KAMPUNG_FRESH_MART: '777:grocer-secret-token',
+    });
     const res = await fetch(`${base}/health`);
     const text = await res.text();
-    expect(JSON.parse(text)).toMatchObject({ sellerPing: 'telegram', sellerChats: ['kampung-fresh-mart'] });
+    expect(JSON.parse(text)).toMatchObject({
+      sellerPing: 'telegram',
+      sellerChats: ['kampung-fresh-mart', 'kilat-home-cleaning'],
+      sellerBots: ['kampung-fresh-mart'],
+    });
     expect(text).not.toContain('-100777');
+    expect(text).not.toContain('grocer-secret-token');
   });
 });
 

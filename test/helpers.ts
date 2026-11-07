@@ -1,4 +1,4 @@
-import type { PayPalGateway, PayPalOrderSummary, VerifyWebhookInput, CaptureOptions, CreateOrderInput } from '../src/paypal.js';
+import type { Buyer, PayPalGateway, PayPalOrderSummary, VerifyWebhookInput, CaptureOptions, CreateOrderInput } from '../src/paypal.js';
 import { PayPalHttpError, type FetchLike, type HttpDeps } from '../src/paypal-http.js';
 
 export function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -66,6 +66,10 @@ export class FakePayPal implements PayPalGateway {
   readonly verifyCalls: VerifyWebhookInput[] = [];
   getCalls = 0;
   verifyResult: boolean | Error = true;
+  /** Who PayPal says paid, once an order is approved. undefined: PayPal shares nothing. */
+  buyer: Buyer | undefined = { name: 'Siti Aminah', email: 'siti@personal.example.com' };
+  /** Make getOrder fail (after capture paths ran), to test best-effort reads. */
+  getOrderError: Error | undefined;
   /** Scripted answers for the next capture calls, used before the default behaviour. */
   readonly captureScript: Array<PayPalHttpError | ((order: FakeOrder) => PayPalOrderSummary)> = [];
   /** Awaited inside captureOrder; lets a test hold a capture open. */
@@ -87,6 +91,7 @@ export class FakePayPal implements PayPalGateway {
 
   async getOrder(paypalOrderId: string): Promise<PayPalOrderSummary> {
     this.getCalls += 1;
+    if (this.getOrderError) throw this.getOrderError;
     const order = this.orders.get(paypalOrderId);
     if (!order) throw paypalError(404, 'RESOURCE_NOT_FOUND', 'INVALID_RESOURCE_ID');
     return this.#summary(order);
@@ -128,6 +133,7 @@ export class FakePayPal implements PayPalGateway {
       approvalUrl: order.approvalUrl,
       customId: order.customId,
       ...(order.capture ? { capture: { ...order.capture } } : {}),
+      ...(this.buyer && (order.status === 'APPROVED' || order.status === 'COMPLETED') ? { buyer: { ...this.buyer } } : {}),
     };
   }
 }

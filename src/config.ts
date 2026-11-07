@@ -28,6 +28,8 @@ const EnvSchema = z.object({
   SUPABASE_SECRET_KEY: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
+  // Per-shop seller chats: "shop-id=chat-id,shop-id=chat-id". Shops not listed use TELEGRAM_CHAT_ID.
+  TELEGRAM_SHOP_CHATS: z.string().optional(),
 });
 
 export interface AppConfig {
@@ -44,7 +46,13 @@ export interface AppConfig {
   apiKey?: string;
   /** Present when both SUPABASE_URL and SUPABASE_SECRET_KEY are set; otherwise orders live in memory. */
   supabase?: { url: string; secretKey: string };
-  telegram?: { botToken: string; chatId: string };
+  telegram?: {
+    botToken: string;
+    /** Default chat: shops without their own chat, and the platform operator. */
+    chatId: string;
+    /** Each shop's own seller chat, by shop id. */
+    shopChats: Record<string, string>;
+  };
   /** Non-fatal problems worth logging at startup. Never contains secret values. */
   warnings: string[];
 }
@@ -65,6 +73,29 @@ function withoutBlanks(env: Record<string, string | undefined>): Record<string, 
   return out;
 }
 
+const SHOP_ID = /^[a-z0-9-]{1,64}$/;
+/** A numeric chat id (groups are negative) or a public @channelname. */
+const CHAT_ID = /^(-?\d{1,20}|@[A-Za-z0-9_]{5,32})$/;
+
+/**
+ * Parses TELEGRAM_SHOP_CHATS. A malformed entry is skipped with a warning rather than
+ * stopping the server: a seller ping must never take the shop down.
+ */
+export function parseShopChats(raw: string | undefined, warnings: string[]): Record<string, string> {
+  const chats: Record<string, string> = {};
+  for (const entry of (raw ?? '').split(',')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const [shopId = '', chatId = '', ...rest] = trimmed.split('=').map((part) => part.trim());
+    if (rest.length > 0 || !SHOP_ID.test(shopId) || !CHAT_ID.test(chatId)) {
+      warnings.push(`TELEGRAM_SHOP_CHATS: skipped an entry that isn't "shop-id=chat-id" (entry ${Object.keys(chats).length + 1}).`);
+      continue;
+    }
+    chats[shopId] = chatId;
+  }
+  return chats;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const parsed = EnvSchema.safeParse(withoutBlanks(env));
   if (!parsed.success) {
@@ -83,6 +114,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (Boolean(e.TELEGRAM_BOT_TOKEN) !== Boolean(e.TELEGRAM_CHAT_ID)) {
     warnings.push('Telegram needs both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID; seller pings are off.');
   }
+  const shopChats = parseShopChats(e.TELEGRAM_SHOP_CHATS, warnings);
 
   return {
     port: e.PORT,
@@ -98,7 +130,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       e.SUPABASE_URL && e.SUPABASE_SECRET_KEY ? { url: e.SUPABASE_URL, secretKey: e.SUPABASE_SECRET_KEY } : undefined,
     telegram:
       e.TELEGRAM_BOT_TOKEN && e.TELEGRAM_CHAT_ID
-        ? { botToken: e.TELEGRAM_BOT_TOKEN, chatId: e.TELEGRAM_CHAT_ID }
+        ? { botToken: e.TELEGRAM_BOT_TOKEN, chatId: e.TELEGRAM_CHAT_ID, shopChats }
         : undefined,
     warnings,
   };

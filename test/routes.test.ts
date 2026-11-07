@@ -64,6 +64,14 @@ describe('GET /health', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ status: 'ok', paypal: { credentialsConfigured: true, webhookConfigured: true } });
   });
+
+  it('lists which shops have their own seller chat, never the chat ids', async () => {
+    const { base } = await start({ TELEGRAM_BOT_TOKEN: 'bot', TELEGRAM_CHAT_ID: '42', TELEGRAM_SHOP_CHATS: 'kampung-fresh-mart=-100777' });
+    const res = await fetch(`${base}/health`);
+    const text = await res.text();
+    expect(JSON.parse(text)).toMatchObject({ sellerPing: 'telegram', sellerChats: ['kampung-fresh-mart'] });
+    expect(text).not.toContain('-100777');
+  });
 });
 
 describe('GET /', () => {

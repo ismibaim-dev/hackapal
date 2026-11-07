@@ -154,6 +154,19 @@ describe('summarize', () => {
     });
     expect(summarize(captured as never)).toMatchObject({ status: 'COMPLETED', capture: { id: 'CAP-1', status: 'COMPLETED' } });
   });
+
+  it('reads the buyer from payment_source.paypal, falling back to the deprecated payer', () => {
+    const fromSource = sdkOrder({
+      status: 'COMPLETED',
+      paymentSource: { paypal: { emailAddress: 'siti@personal.example.com', name: { givenName: 'Siti', surname: 'Aminah' } } },
+      payer: { emailAddress: 'old@personal.example.com' },
+    });
+    expect(summarize(fromSource as never).buyer).toEqual({ name: 'Siti Aminah', email: 'siti@personal.example.com' });
+    const fromPayer = sdkOrder({ status: 'APPROVED', payer: { emailAddress: 'old@personal.example.com' } });
+    expect(summarize(fromPayer as never).buyer).toEqual({ email: 'old@personal.example.com' });
+    expect(summarize(sdkOrder() as never)).not.toHaveProperty('buyer');
+    expect(summarize(sdkOrder({ paymentSource: { paypal: {} } }) as never)).not.toHaveProperty('buyer');
+  });
 });
 
 describe('PayPalClient (Orders via the SDK)', () => {

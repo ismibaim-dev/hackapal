@@ -46,3 +46,6 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      # Each shop's own seller chat: shop-id=chat-id,shop-id=chat-id (find ids with npm run telegram-chats).
+      - key: TELEGRAM_SHOP_CHATS
+        sync: false

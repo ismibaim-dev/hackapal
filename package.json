@@ -19,7 +19,8 @@
     "mcp-smoke": "tsx scripts/mcp-smoke.ts",
     "probe-paypal-mcp": "tsx scripts/probe-paypal-mcp.ts",
     "stock": "tsx scripts/stock.ts",
-    "probe-payee": "tsx scripts/probe-payee.ts"
+    "probe-payee": "tsx scripts/probe-payee.ts",
+    "telegram-chats": "tsx scripts/telegram-chats.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

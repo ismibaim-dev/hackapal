@@ -79,6 +79,8 @@ export interface PayPalOrderSummary {
   customId?: string;
   /** First capture of the first purchase unit, once there is one. */
   capture?: { id: string; status: string };
+  /** Who paid, once the buyer has approved. For the seller ping only; we don't store it. */
+  buyer?: Buyer;
 }
 
 export const DECLINE_MOCK_HEADER = JSON.stringify({ mock_application_codes: 'INSTRUMENT_DECLINED' });
@@ -356,18 +358,41 @@ export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancel
   };
 }
 
+/** The paying buyer as PayPal reports them. Either field may be missing. */
+export interface Buyer {
+  name?: string;
+  email?: string;
+}
+
+/**
+ * The buyer from payment_source.paypal, falling back to the deprecated top-level payer
+ * (the SDK marks payer as deprecated in favour of payment_source.paypal).
+ */
+function buyerOf(order: SdkOrder): Buyer | undefined {
+  const source = order.paymentSource?.paypal ?? order.payer;
+  if (!source) return undefined;
+  const name = [source.name?.givenName, source.name?.surname].filter(Boolean).join(' ').trim();
+  const buyer: Buyer = {
+    ...(name ? { name } : {}),
+    ...(source.emailAddress ? { email: source.emailAddress } : {}),
+  };
+  return buyer.name || buyer.email ? buyer : undefined;
+}
+
 export function summarize(order: SdkOrder | undefined): PayPalOrderSummary {
   if (!order?.id || !order.status) throw new Error('PayPal returned an order without id or status');
   const links = order.links ?? [];
   const approvalUrl = (links.find((l) => l.rel === 'payer-action') ?? links.find((l) => l.rel === 'approve'))?.href;
   const unit = order.purchaseUnits?.[0];
   const capture = unit?.payments?.captures?.[0];
+  const buyer = buyerOf(order);
   return {
     id: order.id,
     status: String(order.status),
     ...(approvalUrl ? { approvalUrl } : {}),
     ...(unit?.customId ? { customId: unit.customId } : {}),
     ...(capture?.id && capture.status ? { capture: { id: capture.id, status: String(capture.status) } } : {}),
+    ...(buyer ? { buyer } : {}),
   };
 }
 

@@ -107,7 +107,7 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
         `and get_order_status to check payment. ${PAY_RULE}`
       : 'hackapal is a marketplace of small local sellers who take payment through PayPal. Use list_shops ' +
         'to see the shops, list_products to see what a shop sells, create_order to start a PayPal checkout ' +
-        `for the buyer (one order per shop; each seller is paid directly), and get_order_status to check payment. ${PAY_RULE}`,
+        `for the buyer (items from several shops go in one checkout; each seller is paid directly), and get_order_status to check payment. ${PAY_RULE}`,
   });
 
   async function readProducts(shopId?: string): Promise<ShopProduct[] | CallToolResult> {
@@ -196,7 +196,10 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
       description:
         'Creates an order and a PayPal checkout for the buyer. Before calling it, confirm the items, quantities ' +
         'and the total (from list_products) with the buyer. ' +
-        (scoped ? '' : 'One order holds items from one shop only; the seller is paid directly through PayPal. ') +
+        (scoped
+          ? ''
+          : 'A cart may mix shops: leave out shop_id and the buyer approves ONE PayPal checkout that pays each seller directly. ' +
+            'Pass shop_id only to keep the order to a single shop. ') +
         'The shop prices the order itself; you cannot set prices. If the buyer mentions delivery timing or instructions for ' +
         'the seller, pass them as note. Shops that deliver ask for the address in PayPal, so do not collect it in the chat. ' +
         'Returns the order id, the itemised total and an ' +
@@ -206,7 +209,9 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
       inputSchema: scoped
         ? { ...CartInputSchema.shape, note: noteInput }
         : {
-            shop_id: shopIdInput.optional().describe('shop_id from list_shops. Recommended; if left out, the shop of the items is used.'),
+            shop_id: shopIdInput
+              .optional()
+              .describe('Only to restrict the order to one shop. Leave it out for a cart from one or several shops (one checkout).'),
             ...CartInputSchema.shape,
             note: noteInput,
           },
@@ -238,7 +243,9 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
         return json({
           ...view,
           next_step:
-            `Give the buyer this PayPal link to pay ${view.total} to ${result.shop.name}: ${view.approval_url} . ` +
+            `Give the buyer this PayPal link to pay ${view.total} to ${result.shops.map((s) => s.name).join(' and ')}` +
+            (result.shops.length > 1 ? ' in one checkout (each seller is paid directly)' : '') +
+            `: ${view.approval_url} . ` +
             'After they approve, call get_order_status with this order_id. It is not paid until status is COMPLETED.',
         });
       } catch (err) {

@@ -1,7 +1,7 @@
 import type { Catalog, ShopInfo } from './catalog.js';
 import { log } from './log.js';
-import { formatUsd } from './money.js';
-import type { Buyer, PayPalGateway, PayPalOrderSummary } from './paypal.js';
+import { formatUsd, sumCents } from './money.js';
+import type { Buyer, PayPalGateway, PayPalOrderSummary, UnitCapture } from './paypal.js';
 import { PayPalHttpError } from './paypal-http.js';
 import { platformFromCatalogs, type Platform, type ShopProduct } from './platform.js';
 import { priceCart, type CartInput, type PricingIssue, type Quote } from './pricing.js';
@@ -69,10 +69,30 @@ export interface CaptureResult {
 /** Why an order could not be created. Pricing issues, plus which shop it belongs to. */
 export type OrderIssue =
   | PricingIssue
-  | { code: 'UNKNOWN_SHOP'; shopId: string; message: string }
-  | { code: 'MIXED_SHOPS'; shopIds: string[]; message: string };
+  | { code: 'UNKNOWN_SHOP'; shopId: string; message: string };
 
-export type CreateOrderResult = { ok: true; order: Order; quote: Quote; shop: Readonly<ShopInfo> } | { ok: false; issues: OrderIssue[] };
+/** The shops in an order, in item order: one for a normal order, several for a combined checkout. */
+export type CreateOrderResult = { ok: true; order: Order; quote: Quote; shops: Readonly<ShopInfo>[] } | { ok: false; issues: OrderIssue[] };
+
+interface PlanPart {
+  shop: Readonly<ShopInfo>;
+  quote: Quote;
+}
+type Plan = { ok: true; parts: PlanPart[] } | { ok: false; issues: OrderIssue[] };
+
+/** Brand shown in PayPal for a combined checkout; each purchase unit still names its shop. */
+export const PLATFORM_BRAND = 'hackapal';
+
+/** One quote for the whole order (all shops), for storage and display. */
+function combineQuotes(quotes: Quote[]): Quote {
+  if (quotes.length === 1) return quotes[0]!;
+  const lines = quotes.flatMap((q) => q.lines);
+  const itemTotalCents = sumCents(quotes.map((q) => q.itemTotalCents));
+  return { currency: quotes[0]!.currency, lines, itemTotalCents, totalCents: sumCents(quotes.map((q) => q.totalCents)) };
+}
+
+const CAPTURE_DONE = new Set(['COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED']);
+const CAPTURE_FAILED = new Set(['DECLINED', 'FAILED']);
 
 /** Told once per order, when it moves to COMPLETED. `buyer` is who paid, when PayPal says. */
 export interface SellerNotifier {
@@ -160,18 +180,32 @@ export class OrderService {
     return this.#platform.shop(shopId);
   }
 
-  /** The shop an order belongs to, from its items (every line of an order is from one shop). */
-  shopForOrder(order: Order): Readonly<ShopInfo> | undefined {
+  /** The shops an order belongs to, from its items, in item order (several for a combined checkout). */
+  shopsForOrder(order: Order): Readonly<ShopInfo>[] {
+    const shops = new Map<string, Readonly<ShopInfo>>();
     for (const item of order.items) {
       const shop = this.#platform.shopOfProduct(item.productId);
-      if (shop) return shop;
+      if (shop && !shops.has(shop.id)) shops.set(shop.id, shop);
     }
-    return undefined;
+    return [...shops.values()];
   }
 
-  /** What agents and scripts see for an order, with its shop. */
+  /** The order's shop when it has exactly one; undefined for a combined checkout. */
+  shopForOrder(order: Order): Readonly<ShopInfo> | undefined {
+    const shops = this.shopsForOrder(order);
+    return shops.length === 1 ? shops[0] : undefined;
+  }
+
+  /** What agents and scripts see for an order, with its shop or shops. */
   view(order: Order): OrderView {
-    return toOrderView(order, this.shopForOrder(order));
+    const shops = this.shopsForOrder(order);
+    if (shops.length <= 1) return toOrderView(order, shops[0]);
+    const totalFor = (shopId: string) =>
+      sumCents(order.items.filter((i) => this.#platform.shopOfProduct(i.productId)?.id === shopId).map((i) => i.lineTotalCents));
+    return {
+      ...toOrderView(order),
+      shops: shops.map((s) => ({ shop_id: s.id, name: s.name, total: formatUsd(totalFor(s.id)) })),
+    };
   }
 
   /**
@@ -203,31 +237,43 @@ export class OrderService {
   }
 
   /**
-   * Price and create an order for one shop. The shop is `shopId` when given, otherwise the
-   * shop that sells the items. A cart can't mix shops: each seller gets paid separately.
+   * Price and create an order. With `shopId`, every item must come from that shop. Without it,
+   * the items decide: one shop gives a normal order, several shops give one combined checkout
+   * (design decision 18): one PayPal order with a purchase unit per shop, each paying that
+   * shop's own account, so the buyer approves once and every seller is paid directly.
    */
   async createOrder(
     input: CartInput,
     options: { shopId?: string; simulateDecline?: boolean; note?: string } = {},
   ): Promise<CreateOrderResult> {
-    const resolved = this.#resolveShop(input, options.shopId);
-    if (!resolved.ok) return resolved;
-    const { catalog } = resolved;
-    const shop = catalog.shop;
-
-    const priced = priceCart(catalog, input, await this.#stock.levels());
-    if (!priced.ok) return { ok: false, issues: priced.issues.map((issue) => this.#explainForeignProduct(issue, shop)) };
-    const { quote } = priced;
+    const levels = await this.#stock.levels();
+    const planned = options.shopId !== undefined ? this.#planForShop(input, options.shopId, levels) : this.#planByItems(input, levels);
+    if (!planned.ok) return planned;
+    const { parts } = planned;
+    const shops = parts.map((p) => p.shop);
+    const combined = parts.length > 1;
+    const quote = combineQuotes(parts.map((p) => p.quote));
 
     const id = newOrderId();
     const paypalOrder = await this.#paypal.createOrder({
       orderId: id,
       quote,
-      brandName: shop.name,
+      brandName: combined ? PLATFORM_BRAND : shops[0]!.name,
       returnUrl: `${this.#baseUrl}/paypal/return`,
       cancelUrl: `${this.#baseUrl}/paypal/cancel`,
-      ...(shop.payeeEmail ? { payeeEmail: shop.payeeEmail } : {}),
-      ...(shop.collectsAddress ? { collectAddress: true } : {}),
+      ...(combined
+        ? {
+            units: parts.map((p) => ({
+              referenceId: p.shop.id,
+              label: p.shop.name,
+              quote: p.quote,
+              ...(p.shop.payeeEmail ? { payeeEmail: p.shop.payeeEmail } : {}),
+            })),
+          }
+        : shops[0]!.payeeEmail
+          ? { payeeEmail: shops[0]!.payeeEmail }
+          : {}),
+      ...(shops.some((s) => s.collectsAddress) ? { collectAddress: true } : {}),
     });
     if (!paypalOrder.approvalUrl) {
       throw new Error(`PayPal order ${paypalOrder.id} has no payer-action or approve link`);
@@ -244,44 +290,52 @@ export class OrderService {
     });
     log.info('order created', {
       order_id: id,
-      shop_id: shop.id,
+      shop_ids: shops.map((s) => s.id),
       paypal_order_id: paypalOrder.id,
       total: formatUsd(order.totalCents),
       simulate_decline: order.simulateDecline,
       has_note: order.buyerNote !== null,
     });
-    return { ok: true, order, quote, shop };
+    return { ok: true, order, quote, shops };
   }
 
-  #resolveShop(
-    input: CartInput,
-    shopId: string | undefined,
-  ): { ok: true; catalog: Catalog } | { ok: false; issues: OrderIssue[] } {
-    if (shopId !== undefined) {
-      const catalog = this.#platform.catalog(shopId);
-      if (catalog) return { ok: true, catalog };
+  #planForShop(input: CartInput, shopId: string, levels: ReadonlyMap<string, number>): Plan {
+    const catalog = this.#platform.catalog(shopId);
+    if (!catalog) {
       const valid = this.#platform.shops().map((s) => s.id).join(', ');
       return { ok: false, issues: [{ code: 'UNKNOWN_SHOP', shopId, message: `Unknown shop_id "${shopId}". Valid ids: ${valid}.` }] };
     }
-    const shopIds = [
-      ...new Set(input.items.flatMap((item) => this.#platform.shopOfProduct(item.product_id.trim())?.id ?? [])),
-    ];
-    if (shopIds.length > 1) {
-      const names = shopIds.map((id) => this.#platform.shop(id)?.name ?? id).join(' and ');
-      return {
-        ok: false,
-        issues: [
-          {
-            code: 'MIXED_SHOPS',
-            shopIds,
-            message: `These items come from ${names}. Each shop is paid separately, so create one order per shop.`,
-          },
-        ],
-      };
+    const priced = priceCart(catalog, input, levels);
+    if (!priced.ok) return { ok: false, issues: priced.issues.map((issue) => this.#explainForeignProduct(issue, catalog.shop)) };
+    return { ok: true, parts: [{ shop: catalog.shop, quote: priced.quote }] };
+  }
+
+  /** Group the items by the shop that sells them and price each group from that shop's catalog. */
+  #planByItems(input: CartInput, levels: ReadonlyMap<string, number>): Plan {
+    const groups = new Map<string, CartInput['items']>();
+    const unknown: CartInput['items'] = [];
+    for (const item of input.items) {
+      const shop = this.#platform.shopOfProduct(item.product_id.trim());
+      if (!shop) {
+        unknown.push(item);
+        continue;
+      }
+      groups.set(shop.id, [...(groups.get(shop.id) ?? []), item]);
     }
-    // No known product at all: price against the first shop so the buyer sees which ids are wrong.
-    const catalog = this.#platform.catalog(shopIds[0] ?? this.#platform.shops()[0]!.id)!;
-    return { ok: true, catalog };
+    // Unknown ids are priced against a catalog so the buyer gets the usual message with valid ids.
+    const fallback = [...groups.keys()][0] ?? this.#platform.shops()[0]!.id;
+    if (unknown.length > 0) groups.set(fallback, [...(groups.get(fallback) ?? []), ...unknown]);
+
+    const parts: PlanPart[] = [];
+    const issues: OrderIssue[] = [];
+    for (const [shopId, items] of groups) {
+      const catalog = this.#platform.catalog(shopId)!;
+      const priced = priceCart(catalog, { items }, levels);
+      if (priced.ok) parts.push({ shop: catalog.shop, quote: priced.quote });
+      else issues.push(...priced.issues);
+    }
+    if (issues.length > 0) return { ok: false, issues };
+    return { ok: true, parts };
   }
 
   /** A product another shop sells gets a clearer message than "unknown". */
@@ -291,7 +345,7 @@ export class OrderService {
     if (!owner || owner.id === shop.id) return issue;
     return {
       ...issue,
-      message: `"${issue.productId}" is sold by ${owner.name} (shop_id ${owner.id}), not ${shop.name}. Create a separate order for it.`,
+      message: `"${issue.productId}" is sold by ${owner.name} (shop_id ${owner.id}), not ${shop.name}. Leave out shop_id to buy from several shops in one checkout.`,
     };
   }
 
@@ -406,19 +460,37 @@ export class OrderService {
     throw err;
   }
 
-  /** Apply a PayPal order that may carry a capture (capture response or a fresh GET). */
+  /**
+   * Apply a PayPal order that may carry captures (capture response or a fresh GET). A combined
+   * checkout has one capture per seller: COMPLETED once every seller's capture is done; while
+   * any is still PENDING we wait; if some failed and the rest are done, the order completes for
+   * the sellers who were paid (stock and pings for those only) and the failure is logged.
+   */
   async #applyCaptured(orderId: string, paypalOrder: PayPalOrderSummary): Promise<CaptureResult> {
-    const capture = paypalOrder.capture;
-    if (capture?.status === 'COMPLETED' || capture?.status === 'PARTIALLY_REFUNDED' || capture?.status === 'REFUNDED') {
-      const { order } = await this.#markCompleted(orderId, capture.id, paypalOrder.buyer);
+    const captures: UnitCapture[] =
+      paypalOrder.captures ?? (paypalOrder.capture ? [{ referenceId: 'default', ...paypalOrder.capture }] : []);
+    const captureId = captures.map((c) => c.id).join(',');
+    const done = captures.filter((c) => CAPTURE_DONE.has(c.status));
+    const failed = captures.filter((c) => CAPTURE_FAILED.has(c.status));
+    const pending = captures.length - done.length - failed.length;
+
+    if (captures.length > 0 && pending === 0 && done.length > 0) {
+      if (failed.length > 0) {
+        log.error('combined checkout partly captured: some sellers were not paid', {
+          order_id: orderId,
+          paid: done.map((c) => c.referenceId),
+          failed: failed.map((c) => `${c.referenceId}:${c.status}`),
+        });
+      }
+      const { order } = await this.#markCompleted(orderId, captureId, paypalOrder.buyer, done);
       return { outcome: order.status === 'COMPLETED' ? 'completed' : statusOutcome(order.status), order };
     }
-    if (capture?.status === 'PENDING') {
-      const { order } = await this.#transition(orderId, 'PAYMENT_PENDING', { captureId: capture.id });
+    if (pending > 0 && captures.some((c) => c.status === 'PENDING')) {
+      const { order } = await this.#transition(orderId, 'PAYMENT_PENDING', { captureId });
       return { outcome: statusOutcome(order.status), order };
     }
-    if (capture?.status === 'DECLINED' || capture?.status === 'FAILED') {
-      const { order } = await this.#transition(orderId, 'FAILED', { captureId: capture.id });
+    if (captures.length > 0 && failed.length === captures.length) {
+      const { order } = await this.#transition(orderId, 'FAILED', { captureId });
       return { outcome: 'failed', order };
     }
     // No capture yet (e.g. PayPal still shows APPROVED): report what we know.
@@ -470,6 +542,13 @@ export class OrderService {
       const order = await this.#orderForCapture(resource);
       if (!order) return this.#ignore(event, 'unknown order');
       this.#record(order.id, event);
+      if (this.shopsForOrder(order).length > 1) {
+        // One event per seller's capture: read the whole order so every seller's capture counts.
+        if (FINAL_STATUSES.has(order.status)) return this.#ignore(event, `order already ${order.status}`);
+        const reconciled = await this.#applyCaptured(order.id, await this.#paypal.getOrder(order.paypalOrderId));
+        log.info('webhook processed', { event_id: event.id, event_type: type, order_id: order.id, outcome: reconciled.outcome });
+        return;
+      }
       const result =
         type === 'PAYMENT.CAPTURE.COMPLETED'
           ? await this.#markCompleted(order.id, resource.id ?? order.captureId ?? 'unknown')
@@ -517,10 +596,27 @@ export class OrderService {
     }
   }
 
-  async #markCompleted(orderId: string, captureId: string, buyer?: Buyer): Promise<{ order: Order; changed: boolean }> {
+  /**
+   * Move to COMPLETED, then take stock and ping each paid seller once. `paid` lists the
+   * captures that completed (per seller in a combined checkout); without it every line counts.
+   */
+  async #markCompleted(
+    orderId: string,
+    captureId: string,
+    buyer?: Buyer,
+    paid?: UnitCapture[],
+  ): Promise<{ order: Order; changed: boolean }> {
     const result = await this.#transition(orderId, 'COMPLETED', { captureId });
     if (!result.changed) return result;
-    for (const item of result.order.items) {
+    const shops = this.shopsForOrder(result.order);
+    const captureFor = new Map<string, string>(
+      shops.length > 1 ? (paid ?? []).map((c) => [c.referenceId, c.id] as [string, string]) : shops.map((s) => [s.id, captureId] as [string, string]),
+    );
+    const isPaid = (productId: string) => {
+      const shop = this.#platform.shopOfProduct(productId);
+      return shops.length <= 1 || (shop !== undefined && captureFor.has(shop.id));
+    };
+    for (const item of result.order.items.filter((i) => isPaid(i.productId))) {
       try {
         const { remaining, shortBy, applied } = await this.#stock.take(orderId, item.productId, item.quantity);
         if (!applied) {
@@ -536,12 +632,28 @@ export class OrderService {
       }
     }
     log.info('order completed', { order_id: orderId, capture_id: captureId, total: formatUsd(result.order.totalCents) });
-    const shop = this.shopForOrder(result.order);
-    if (this.#notifier && shop) {
+    if (this.#notifier && shops.length > 0) {
       const notifier = this.#notifier;
       const order = result.order;
-      // Fire and forget: the seller ping never delays or fails the payment.
-      (async () => notifier.orderCompleted(order, shop, buyer ?? (await this.#buyerFor(order))))().catch((err: unknown) => {
+      // Fire and forget: the seller pings never delay or fail the payment. Each paid seller
+      // gets only their own lines, total and capture.
+      (async () => {
+        const who = buyer ?? (await this.#buyerFor(order));
+        for (const shop of shops) {
+          const shopCapture = captureFor.get(shop.id);
+          if (shops.length > 1 && !shopCapture) continue;
+          const items = order.items.filter((i) => this.#platform.shopOfProduct(i.productId)?.id === shop.id);
+          const slice: Order = {
+            ...order,
+            items,
+            totalCents: sumCents(items.map((i) => i.lineTotalCents)),
+            captureId: shopCapture ?? order.captureId,
+          };
+          await notifier.orderCompleted(slice, shop, who).catch((err: unknown) => {
+            log.warn('seller notification failed', { order_id: orderId, shop_id: shop.id, err });
+          });
+        }
+      })().catch((err: unknown) => {
         log.warn('seller notification failed', { order_id: orderId, err });
       });
     }
@@ -633,8 +745,10 @@ function statusOutcome(status: OrderStatus): CaptureOutcome {
 /** What agents and scripts see. Amounts as display strings and cents; no internals. */
 export interface OrderView {
   order_id: string;
-  /** The seller. Absent only if the order's products no longer exist in any shop. */
+  /** The seller, for an order from one shop. */
   shop?: { shop_id: string; name: string };
+  /** Every seller and their part of the total, for a combined checkout. */
+  shops?: { shop_id: string; name: string; total: string }[];
   /** The buyer's note for the seller, as stored. */
   note?: string;
   status: OrderStatus;

@@ -4,7 +4,7 @@ import { createCatalog } from '../src/catalog.js';
 import { createPlatform } from '../src/platform.js';
 import { canTransition, cleanNote, MAX_NOTE_LENGTH, OrderService, toOrderView, type SellerNotifier } from '../src/orders.js';
 import { InMemoryOrderStore, ORDER_STATUSES, type Order } from '../src/store.js';
-import type { Buyer } from '../src/paypal.js';
+import { buildOrderRequest, type Buyer } from '../src/paypal.js';
 import { deferred, eventually, FakePayPal, paypalError } from './helpers.js';
 
 const COOKIES = { items: [{ product_id: 'choc-chip-cookies', quantity: 2 }] };
@@ -380,17 +380,12 @@ describe('OrderService on the marketplace', () => {
     expect(paypal.createCalls[1]).not.toHaveProperty('payeeEmail');
   });
 
-  it('refuses an unknown shop and a cart that mixes shops, without calling PayPal', async () => {
+  it('refuses an unknown shop, and a foreign item when shop_id is given, without calling PayPal', async () => {
     const { service, paypal } = market();
     const unknown = await service.createOrder({ items: [{ product_id: 'eggs-30', quantity: 1 }] }, { shopId: 'nope' });
     expect(unknown).toMatchObject({ ok: false, issues: [{ code: 'UNKNOWN_SHOP', shopId: 'nope' }] });
-    const mixed = await service.createOrder({
-      items: [
-        { product_id: 'eggs-30', quantity: 1 },
-        { product_id: 'sofa-shampoo', quantity: 1 },
-      ],
-    });
-    expect(mixed).toMatchObject({ ok: false, issues: [{ code: 'MIXED_SHOPS', shopIds: ['kampung-fresh-mart', 'kilat-home-cleaning'] }] });
+    const foreign = await service.createOrder({ items: [{ product_id: 'eggs-30', quantity: 1 }] }, { shopId: 'kilat-home-cleaning' });
+    expect(foreign).toMatchObject({ ok: false, issues: [{ code: 'UNKNOWN_PRODUCT', productId: 'eggs-30' }] });
     expect(paypal.createCalls).toHaveLength(0);
   });
 
@@ -524,5 +519,137 @@ describe('delivery address and buyer note', () => {
     expect(cleanNote('   \n ')).toBeNull();
     expect(cleanNote(undefined)).toBeNull();
     expect(cleanNote('x'.repeat(400))).toHaveLength(MAX_NOTE_LENGTH);
+  });
+});
+
+describe('combined checkout (several shops, one PayPal approval)', () => {
+  function combined() {
+    const paypal = new FakePayPal();
+    const store = new InMemoryOrderStore();
+    const pings: { order: Order; shop: Readonly<ShopInfo> }[] = [];
+    const service = new OrderService({
+      platform: createPlatform(),
+      store,
+      paypal,
+      publicBaseUrl: 'https://shop.example',
+      allowSimulatedDecline: true,
+      notifier: { orderCompleted: async (order, shop) => void pings.push({ order, shop }) },
+    });
+    const cart = {
+      items: [
+        { product_id: 'kuih-lapis', quantity: 1 },
+        { product_id: 'eggs-30', quantity: 2 },
+        { product_id: 'choc-chip-cookies', quantity: 1 },
+      ],
+    };
+    return { service, paypal, store, pings, cart };
+  }
+
+  it("builds one PayPal order with a purchase unit per shop, each priced from its own catalog and paid to its own account", async () => {
+    const { service, paypal, cart } = combined();
+    const result = await service.createOrder(cart, { note: 'After 6pm' });
+    if (!result.ok) throw new Error(JSON.stringify(result.issues));
+    expect(result.shops.map((s) => s.id)).toEqual(['aunties-kitchen', 'kampung-fresh-mart']);
+    expect(result.order.totalCents).toBe(800 + 1100 + 600);
+    const call = paypal.createCalls[0]!;
+    expect(call.brandName).toBe('hackapal');
+    expect(call.collectAddress).toBe(true);
+    expect(call.units?.map((u) => ({ ref: u.referenceId, total: u.quote.totalCents, payee: u.payeeEmail }))).toEqual([
+      { ref: 'aunties-kitchen', total: 1400, payee: undefined },
+      { ref: 'kampung-fresh-mart', total: 1100, payee: 'sb-cjqou53656464@business.example.com' },
+    ]);
+    // The request PayPal gets: one unit per shop with reference_id and payee, our order id on each.
+    const request = buildOrderRequest(call);
+    expect(request.purchaseUnits.map((u) => [u.referenceId, u.payee?.emailAddress, u.amount.value, u.customId])).toEqual([
+      ['aunties-kitchen', undefined, '14.00', result.order.id],
+      ['kampung-fresh-mart', 'sb-cjqou53656464@business.example.com', '11.00', result.order.id],
+    ]);
+  });
+
+  it("refuses the whole cart if any shop's part can't be priced", async () => {
+    const { service, paypal } = combined();
+    const result = await service.createOrder({
+      items: [
+        { product_id: 'eggs-30', quantity: 1 },
+        { product_id: 'move-out-clean', quantity: 5 },
+      ],
+    });
+    expect(result).toMatchObject({ ok: false, issues: [{ code: 'OUT_OF_STOCK', productId: 'move-out-clean' }] });
+    expect(paypal.createCalls).toHaveLength(0);
+  });
+
+  it('completes on one capture call, takes stock once, and pings each seller with only their lines and capture', async () => {
+    const { service, paypal, pings, cart } = combined();
+    const result = await service.createOrder(cart);
+    if (!result.ok) throw new Error('create failed');
+    paypal.approve(result.order.paypalOrderId);
+    const done = await service.capture(result.order.id, 'return');
+    expect(done.outcome).toBe('completed');
+    expect(paypal.captureCalls).toHaveLength(1);
+    const pp = result.order.paypalOrderId;
+    expect(done.order.captureId).toBe(`CAP-${pp}-aunties-kitchen,CAP-${pp}-kampung-fresh-mart`);
+    await eventually(() => pings.length === 2);
+    const byShop = Object.fromEntries(pings.map((p) => [p.shop.id, p.order]));
+    expect(byShop['aunties-kitchen']).toMatchObject({ totalCents: 1400, captureId: `CAP-${pp}-aunties-kitchen` });
+    expect(byShop['aunties-kitchen']!.items.map((i) => i.productId)).toEqual(['kuih-lapis', 'choc-chip-cookies']);
+    expect(byShop['kampung-fresh-mart']).toMatchObject({ totalCents: 1100, captureId: `CAP-${pp}-kampung-fresh-mart` });
+    const stock = Object.fromEntries((await service.listProducts()).map((p) => [p.id, p.stock]));
+    expect(stock).toMatchObject({ 'kuih-lapis': 14, 'eggs-30': 38, 'choc-chip-cookies': 23 });
+    expect(service.view(done.order)).toMatchObject({
+      shops: [
+        { shop_id: 'aunties-kitchen', total: '$14.00' },
+        { shop_id: 'kampung-fresh-mart', total: '$11.00' },
+      ],
+    });
+    expect(service.view(done.order)).not.toHaveProperty('shop');
+  });
+
+  it("waits while one seller's capture is pending", async () => {
+    const { service, paypal, pings, cart } = combined();
+    paypal.unitCaptureStatus['kampung-fresh-mart'] = 'PENDING';
+    const result = await service.createOrder(cart);
+    if (!result.ok) throw new Error('create failed');
+    paypal.approve(result.order.paypalOrderId);
+    const outcome = await service.capture(result.order.id, 'return');
+    expect(outcome).toMatchObject({ outcome: 'pending', order: { status: 'PAYMENT_PENDING' } });
+    expect(pings).toHaveLength(0);
+  });
+
+  it('completes for the seller who was paid when another capture is declined, and pings only them', async () => {
+    const { service, paypal, pings, cart } = combined();
+    paypal.unitCaptureStatus['kampung-fresh-mart'] = 'DECLINED';
+    const result = await service.createOrder(cart);
+    if (!result.ok) throw new Error('create failed');
+    paypal.approve(result.order.paypalOrderId);
+    const outcome = await service.capture(result.order.id, 'return');
+    expect(outcome.order.status).toBe('COMPLETED');
+    await eventually(() => pings.length === 1);
+    expect(pings[0]?.shop.id).toBe('aunties-kitchen');
+    const stock = Object.fromEntries((await service.listProducts()).map((p) => [p.id, p.stock]));
+    expect(stock['eggs-30']).toBe(40);
+    expect(stock['kuih-lapis']).toBe(14);
+  });
+
+  it('reconciles from PayPal when a per-seller capture webhook arrives, so one event does not complete the whole order', async () => {
+    const { service, paypal, pings, cart } = combined();
+    const result = await service.createOrder(cart);
+    if (!result.ok) throw new Error('create failed');
+    paypal.approve(result.order.paypalOrderId);
+    // PayPal captured (e.g. the buyer closed the tab after the return-page capture started elsewhere).
+    await paypal.captureOrder(result.order.paypalOrderId, { requestId: 'x', simulateDecline: false });
+    await service.handleWebhookEvent({
+      id: 'WH-COMBINED-1',
+      event_type: 'PAYMENT.CAPTURE.COMPLETED',
+      resource: {
+        id: `CAP-${result.order.paypalOrderId}-kampung-fresh-mart`,
+        status: 'COMPLETED',
+        custom_id: result.order.id,
+        supplementary_data: { related_ids: { order_id: result.order.paypalOrderId } },
+      },
+    });
+    const order = await service.get(result.order.id);
+    expect(order?.status).toBe('COMPLETED');
+    expect(order?.captureId?.split(',')).toHaveLength(2);
+    await eventually(() => pings.length === 2);
   });
 });

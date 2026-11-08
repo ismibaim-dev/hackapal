@@ -57,7 +57,7 @@ export function paypalRoutes({ orders, paypal, webhookId }: PayPalRoutesDeps): R
           title: 'Payment complete',
           paragraphs: [
             'Payment complete, you can go back to your assistant.',
-            `${shopName ?? 'The seller'} will contact you to arrange the next step.`,
+            shopName ? `${shopName} will contact you to arrange the next step.` : 'Each seller will contact you to arrange the next step.',
           ],
           tone: 'success',
         });

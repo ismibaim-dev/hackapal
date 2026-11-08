@@ -53,6 +53,9 @@ interface FakeOrder {
   approvalUrl: string;
   customId: string;
   capture?: { id: string; status: string };
+  /** reference_ids of a combined checkout's purchase units (one per seller). */
+  units: string[];
+  captures?: { referenceId: string; id: string; status: string }[];
 }
 
 /**
@@ -74,6 +77,8 @@ export class FakePayPal implements PayPalGateway {
   readonly captureScript: Array<PayPalHttpError | ((order: FakeOrder) => PayPalOrderSummary)> = [];
   /** Awaited inside captureOrder; lets a test hold a capture open. */
   captureGate: Promise<void> | undefined;
+  /** Per-seller capture status for combined checkouts (default COMPLETED), by reference_id. */
+  unitCaptureStatus: Record<string, string> = {};
   #seq = 0;
 
   async createOrder(input: CreateOrderInput): Promise<PayPalOrderSummary> {
@@ -84,6 +89,7 @@ export class FakePayPal implements PayPalGateway {
       status: 'PAYER_ACTION_REQUIRED',
       approvalUrl: `https://www.sandbox.paypal.com/checkoutnow?token=${id}`,
       customId: input.orderId,
+      units: input.units?.map((u) => u.referenceId) ?? [],
     };
     this.orders.set(id, order);
     return this.#summary(order);
@@ -110,6 +116,10 @@ export class FakePayPal implements PayPalGateway {
     if (options.simulateDecline) throw paypalError(422, 'UNPROCESSABLE_ENTITY', 'INSTRUMENT_DECLINED');
     order.status = 'COMPLETED';
     order.capture = { id: `CAP-${order.id}`, status: 'COMPLETED' };
+    if (order.units.length > 0) {
+      order.captures = order.units.map((ref) => ({ referenceId: ref, id: `CAP-${order.id}-${ref}`, status: this.unitCaptureStatus[ref] ?? 'COMPLETED' }));
+      order.capture = { id: order.captures[0]!.id, status: order.captures[0]!.status };
+    }
     return this.#summary(order);
   }
 
@@ -133,6 +143,7 @@ export class FakePayPal implements PayPalGateway {
       approvalUrl: order.approvalUrl,
       customId: order.customId,
       ...(order.capture ? { capture: { ...order.capture } } : {}),
+      ...(order.captures ? { captures: order.captures.map((c) => ({ ...c })) } : {}),
       ...(this.buyer && (order.status === 'APPROVED' || order.status === 'COMPLETED') ? { buyer: { ...this.buyer } } : {}),
     };
   }

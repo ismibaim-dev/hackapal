@@ -46,7 +46,7 @@ describe('/mcp (marketplace)', () => {
     const create = tools.find((t) => t.name === 'create_order')!;
     expect(create.description).toMatch(/only the human buyer can pay/i);
     expect(create.description).toMatch(/never tell the buyer it is paid/i);
-    expect(create.description).toMatch(/one shop only/i);
+    expect(create.description).toMatch(/may mix shops/i);
     expect(Object.keys((create.inputSchema as { properties: object }).properties)).toEqual(['shop_id', 'items', 'note']);
   });
 
@@ -106,14 +106,22 @@ describe('/mcp (marketplace)', () => {
     expect(tooLong.isError).toBe(true);
   });
 
-  it('create_order refuses a cart that mixes shops, and points at the right shop for a foreign item', async () => {
+  it('create_order puts a cart from two shops in one checkout, and points at the right shop when shop_id excludes an item', async () => {
     const { client, paypal } = await start();
     const mixed = (await client.callTool({
       name: 'create_order',
       arguments: { items: [{ product_id: 'eggs-30', quantity: 1 }, { product_id: 'kuih-lapis', quantity: 1 }] },
     })) as ToolResult;
-    expect(mixed.isError).toBe(true);
-    expect(mixed.content[0]!.text).toContain('MIXED_SHOPS');
+    expect(mixed.isError).toBeFalsy();
+    const body = parse(mixed);
+    expect(body).toMatchObject({ total: '$13.50', status: 'CREATED' });
+    expect(body.shops).toEqual([
+      { shop_id: 'kampung-fresh-mart', name: 'Kampung Fresh Mart', total: '$5.50' },
+      { shop_id: 'aunties-kitchen', name: "Auntie's Kitchen", total: '$8.00' },
+    ]);
+    expect(body.next_step).toContain('in one checkout');
+    expect(paypal.createCalls).toHaveLength(1);
+    paypal.createCalls.length = 0;
 
     const foreign = (await client.callTool({
       name: 'create_order',

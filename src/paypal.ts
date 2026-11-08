@@ -55,6 +55,22 @@ export interface CreateOrderInput {
   payeeEmail?: string;
   /** Ask the buyer for a delivery or service address in PayPal (GET_FROM_FILE). Default: no address. */
   collectAddress?: boolean;
+  /**
+   * Several sellers in one checkout (design decision 18): one purchase unit per seller, each
+   * with its own payee, so one approval pays each seller directly. When set, it replaces the
+   * single unit built from `quote` and `payeeEmail`.
+   */
+  units?: OrderUnit[];
+}
+
+/** One seller's part of a combined checkout. */
+export interface OrderUnit {
+  /** purchase_units[].reference_id; we use the shop id. Required by PayPal when there are several units. */
+  referenceId: string;
+  /** Shown to the buyer, e.g. the shop name. */
+  label: string;
+  quote: Quote;
+  payeeEmail?: string;
 }
 
 export interface CaptureOptions {
@@ -81,6 +97,8 @@ export interface PayPalOrderSummary {
   customId?: string;
   /** First capture of the first purchase unit, once there is one. */
   capture?: { id: string; status: string };
+  /** Every purchase unit's first capture, in order (one per seller in a combined checkout). */
+  captures?: UnitCapture[];
   /** Who paid, once the buyer has approved. For the seller ping only; we don't store it. */
   buyer?: Buyer;
 }
@@ -322,21 +340,33 @@ export class PayPalClient implements PayPalGateway {
   }
 }
 
-export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancelUrl, payeeEmail, collectAddress }: CreateOrderInput): OrderRequest {
-  const currencyCode = quote.currency;
+export function buildOrderRequest({
+  orderId,
+  quote,
+  brandName,
+  returnUrl,
+  cancelUrl,
+  payeeEmail,
+  collectAddress,
+  units,
+}: CreateOrderInput): OrderRequest {
+  const parts: (Omit<OrderUnit, 'referenceId'> & { referenceId?: string })[] = units ?? [{ label: brandName, quote, ...(payeeEmail ? { payeeEmail } : {}) }];
   return {
     intent: CheckoutPaymentIntent.Capture,
-    purchaseUnits: [
-      {
+    purchaseUnits: parts.map((part) => {
+      const currencyCode = part.quote.currency;
+      return {
+        ...(part.referenceId ? { referenceId: part.referenceId } : {}),
+        // Our order id on every unit, so a capture webhook for any unit finds the order.
         customId: orderId,
-        ...(payeeEmail ? { payee: { emailAddress: payeeEmail } } : {}),
-        description: `${brandName} order ${orderId}`.slice(0, 127),
+        ...(part.payeeEmail ? { payee: { emailAddress: part.payeeEmail } } : {}),
+        description: `${part.label} order ${orderId}`.slice(0, 127),
         amount: {
           currencyCode,
-          value: toDecimalString(quote.totalCents),
-          breakdown: { itemTotal: { currencyCode, value: toDecimalString(quote.itemTotalCents) } },
+          value: toDecimalString(part.quote.totalCents),
+          breakdown: { itemTotal: { currencyCode, value: toDecimalString(part.quote.itemTotalCents) } },
         },
-        items: quote.lines.map((line) => ({
+        items: part.quote.lines.map((line) => ({
           name: line.name.slice(0, 127),
           description: line.unit,
           sku: line.productId,
@@ -344,8 +374,8 @@ export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancel
           unitAmount: { currencyCode, value: toDecimalString(line.unitPriceCents) },
           category: ItemCategory.PhysicalGoods,
         })),
-      },
-    ],
+      };
+    }),
     paymentSource: {
       paypal: {
         experienceContext: {
@@ -364,6 +394,13 @@ export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancel
 }
 
 /** The paying buyer as PayPal reports them. Any field may be missing. */
+export interface UnitCapture {
+  /** The unit's reference_id ("default" for a single-unit order). */
+  referenceId: string;
+  id: string;
+  status: string;
+}
+
 export interface Buyer {
   name?: string;
   email?: string;
@@ -407,6 +444,10 @@ export function summarize(order: SdkOrder | undefined): PayPalOrderSummary {
   const approvalUrl = (links.find((l) => l.rel === 'payer-action') ?? links.find((l) => l.rel === 'approve'))?.href;
   const unit = order.purchaseUnits?.[0];
   const capture = unit?.payments?.captures?.[0];
+  const captures: UnitCapture[] = (order.purchaseUnits ?? []).flatMap((u) => {
+    const c = u.payments?.captures?.[0];
+    return c?.id && c.status ? [{ referenceId: u.referenceId ?? 'default', id: c.id, status: String(c.status) }] : [];
+  });
   const buyer = buyerOf(order);
   return {
     id: order.id,
@@ -414,6 +455,7 @@ export function summarize(order: SdkOrder | undefined): PayPalOrderSummary {
     ...(approvalUrl ? { approvalUrl } : {}),
     ...(unit?.customId ? { customId: unit.customId } : {}),
     ...(capture?.id && capture.status ? { capture: { id: capture.id, status: String(capture.status) } } : {}),
+    ...(captures.length > 0 ? { captures } : {}),
     ...(buyer ? { buyer } : {}),
   };
 }

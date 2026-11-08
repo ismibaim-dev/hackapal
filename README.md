@@ -19,7 +19,7 @@ The demo runs on PayPal **sandbox**: no real money moves. It takes about five mi
 - **The model can't set prices.** `create_order` takes product ids and quantities only, and the server prices the cart from its own catalog. Try asking Claude to give you a discount.
 - **Only the human pays.** Claude hands over a link and never claims payment until PayPal confirms the capture.
 - **Stock counts down** only after payment, exactly once per order, even when PayPal's webhook and the return page both report the payment.
-- **Only the right seller gets a Telegram ping** for each paid order (each shop has its own chat), with the buyer's name and email from PayPal so they know whom to contact, and a declined card is recovered by sending the buyer back to PayPal to choose another way to pay. Both are shown in the demo video, because they happen on the seller's phone and through sandbox negative testing.
+- **Only the right seller gets a Telegram order card** for each paid order, from that shop's own bot: items, total, the delivery address the buyer chose in PayPal, the buyer's contact, and any note they gave Claude ("after 6pm, blue gate"), and a declined card is recovered by sending the buyer back to PayPal to choose another way to pay. Both are shown in the demo video, because they happen on the seller's phone and through sandbox negative testing.
 
 **Without claude.ai:** any MCP client that speaks Streamable HTTP works. For example, `npx @modelcontextprotocol/inspector` with transport "Streamable HTTP" and the URL above, or `npm run mcp-smoke -- https://hackapal.onrender.com/mcp` from a clone of this repo.
 
@@ -119,6 +119,7 @@ npm test
 | `npm run money-path -- --base-url <url> [--product <id>] [--simulate-decline] [--api-key <key>]` | Test 1: creates an order on our server (cookies by default; any product of any shop with `--product`), prints the PayPal link for the sandbox buyer, follows the status to `COMPLETED` and waits for the verified webhook. |
 | `npm run mcp-smoke -- <url>/mcp [product-id]` | Test 2a: connects to an MCP endpoint (marketplace or `/s/<shop_id>/mcp`), lists the tools, calls `list_products` and `create_order`, prints the PayPal link. |
 | `npm run stock -- --base-url <url> [--shop <shop_id>] [--set <product-id>=<n> ...]` | Shows live stock, or sets absolute levels (seller restock). Product ids are unique across shops. Needs the server's `API_KEY` (`--api-key` or `HACKAPAL_API_KEY`). |
+| `npm run probe-multi-payee [-- --capture <id> [--wait] \| --show <id>]` | Probe: one sandbox order with two purchase units paying two different sellers. |
 | `npm run probe-payee -- --payee <email> \| --capture <id> [--wait] \| --show <id>` | Option B probe: creates, captures or shows a sandbox order whose payee is another merchant account. |
 | `npm run telegram-chats [-- --shop <shop_id>]` | Lists the chats one seller-ping bot can see, with their ids, for `TELEGRAM_SHOP_CHATS`. Reads that bot's token (`TELEGRAM_BOT_TOKEN`, or `TELEGRAM_BOT_TOKEN_<SHOP>` with `--shop`) from your env or `.env`; never prints it. |
 | `npm run probe-paypal-mcp` | Lists PayPal's sandbox MCP tools with and without `x-feature-flags: commerce:true` (result in the build log). |

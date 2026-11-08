@@ -107,7 +107,9 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
         `and get_order_status to check payment. ${PAY_RULE}`
       : 'hackapal is a marketplace of small local sellers who take payment through PayPal. Use list_shops ' +
         'to see the shops, list_products to see what a shop sells, create_order to start a PayPal checkout ' +
-        `for the buyer (items from several shops go in one checkout; each seller is paid directly), and get_order_status to check payment. ${PAY_RULE}`,
+        'for the buyer, and get_order_status to check payment. When the buyer wants things from several shops, put ' +
+        'ALL of them in ONE create_order call without shop_id: the buyer gets one PayPal link and each seller is still ' +
+        `paid directly. Never split one shopping request into several orders. ${PAY_RULE}`,
   });
 
   async function readProducts(shopId?: string): Promise<ShopProduct[] | CallToolResult> {
@@ -149,7 +151,9 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
     .optional()
     .describe(
       `Optional note from the buyer to the seller, up to ${MAX_NOTE_LENGTH} characters: delivery time window, unit or gate number, ` +
-        'what the cleaner should focus on. Only what the buyer said; never payment details. The address itself is entered in PayPal.',
+        'what the cleaner should focus on. Only what the buyer said; never payment details. The address itself is entered in PayPal. ' +
+        'In a checkout with several shops every seller sees this one note, so write it for all of them ' +
+        '(e.g. "Grocer: after 6pm. Bakery: pickup is fine."); that is no reason to split the order.',
     );
 
   const shopIdInput = z
@@ -198,8 +202,9 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
         'and the total (from list_products) with the buyer. ' +
         (scoped
           ? ''
-          : 'A cart may mix shops: leave out shop_id and the buyer approves ONE PayPal checkout that pays each seller directly. ' +
-            'Pass shop_id only to keep the order to a single shop. ') +
+          : 'Put everything the buyer wants into ONE call, even from several shops, and leave out shop_id: the buyer gets ' +
+            'ONE PayPal link and approves once, and each seller is paid directly. Do not create one order per shop. ' +
+            'Pass shop_id only if the buyer asks to buy from a single shop. ') +
         'The shop prices the order itself; you cannot set prices. If the buyer mentions delivery timing or instructions for ' +
         'the seller, pass them as note. Shops that deliver ask for the address in PayPal, so do not collect it in the chat. ' +
         'Returns the order id, the itemised total and an ' +

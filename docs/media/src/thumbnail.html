@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1500px; height: 1000px; font-family: "Inter", "DejaVu Sans", sans-serif; background: #faf7f2; color: #1d1b18; overflow: hidden; }
+  .wrap { position: absolute; inset: 0; padding: 90px 100px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 60px; align-items: center; }
+  .kicker { font-size: 26px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #b4532a; }
+  h1 { font-family: "Inter Display", "Inter", sans-serif; font-size: 150px; font-weight: 800; letter-spacing: -0.04em; line-height: .95; margin: 18px 0 26px; }
+  .tag { font-size: 40px; line-height: 1.25; font-weight: 500; color: #3b3630; }
+  .tag b { color: #1d1b18; }
+  .chips { display: flex; gap: 14px; margin-top: 44px; flex-wrap: wrap; }
+  .chip { font-size: 25px; font-weight: 600; padding: 12px 22px; border-radius: 999px; background: #fff; border: 2px solid #e7dfd3; }
+  .card { background: #fff; border-radius: 28px; box-shadow: 0 18px 50px rgba(60,40,20,.12); padding: 34px 36px; }
+  .bubble { font-size: 25px; line-height: 1.35; padding: 18px 22px; border-radius: 20px; margin-bottom: 16px; }
+  .you { background: #1d1b18; color: #fff; margin-left: 50px; border-bottom-right-radius: 6px; }
+  .ai { background: #f2ece3; margin-right: 30px; border-bottom-left-radius: 6px; }
+  .pay { margin-top: 8px; display: flex; align-items: center; justify-content: space-between; background: #0b3b7a; color: #fff; border-radius: 16px; padding: 20px 24px; font-size: 27px; font-weight: 700; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+  .seller { border: 2px solid #e7dfd3; border-radius: 16px; padding: 14px 18px; font-size: 22px; }
+  .seller b { display: block; font-size: 24px; margin-bottom: 4px; }
+  .ok { color: #1f7a3d; font-weight: 700; }
+</style></head><body><div class="wrap">
+  <div>
+    <div class="kicker">PayPal AI Hackathon · sandbox</div>
+    <h1>hackapal</h1>
+    <p class="tag">Small sellers with no website, ready for <b>AI shopping</b>. One PayPal checkout, <b>each seller paid directly</b>.</p>
+    <div class="chips"><span class="chip">MCP</span><span class="chip">Orders v2</span><span class="chip">Multi-seller payee</span><span class="chip">Telegram order cards</span></div>
+  </div>
+  <div class="card">
+    <div class="bubble you">Kuih lapis from Auntie's Kitchen and 2 trays of eggs from the grocer, deliver after 6pm.</div>
+    <div class="bubble ai">Two sellers, $19.00, one checkout. Open the link to pay.</div>
+    <div class="pay"><span>Pay with PayPal</span><span>$19.00</span></div>
+    <div class="split">
+      <div class="seller"><b>Auntie's Kitchen</b>$8.00 <span class="ok">paid</span></div>
+      <div class="seller"><b>Kampung Fresh Mart</b>$11.00 <span class="ok">paid</span></div>
+    </div>
+  </div>
+</div></body></html>

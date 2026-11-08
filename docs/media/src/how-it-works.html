@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1500px; height: 1000px; font-family: "Inter", "DejaVu Sans", sans-serif; background: #faf7f2; color: #1d1b18; overflow: hidden; padding: 70px 80px; }
+  h1 { font-family: "Inter Display", "Inter", sans-serif; font-size: 58px; font-weight: 800; letter-spacing: -0.02em; }
+  .sub { font-size: 26px; color: #5a534b; margin: 10px 0 46px; }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 26px; position: relative; }
+  .step { background: #fff; border-radius: 22px; padding: 28px 26px; box-shadow: 0 10px 30px rgba(60,40,20,.09); min-height: 330px; }
+  .n { width: 50px; height: 50px; border-radius: 50%; background: #b4532a; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 26px; margin-bottom: 18px; }
+  .step h2 { font-size: 30px; margin-bottom: 12px; }
+  .step p { font-size: 22px; line-height: 1.4; color: #3b3630; }
+  code { font-family: "DejaVu Sans Mono", monospace; font-size: 19px; background: #f2ece3; padding: 2px 7px; border-radius: 6px; }
+  .rules { margin-top: 40px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .rule { border: 2px solid #e7dfd3; border-radius: 18px; padding: 20px 22px; font-size: 22px; line-height: 1.35; }
+  .rule b { display: block; font-size: 24px; margin-bottom: 6px; color: #0b3b7a; }
+</style></head><body>
+  <h1>How hackapal works</h1>
+  <p class="sub">The AI does the shopping. The human does the paying. The server decides every price.</p>
+  <div class="row">
+    <div class="step"><div class="n">1</div><h2>Ask Claude</h2><p>Claude reaches the shops over MCP: <code>list_shops</code>, <code>list_products</code>, then one <code>create_order</code> for the whole cart.</p></div>
+    <div class="step"><div class="n">2</div><h2>One PayPal checkout</h2><p>The server prices the cart and creates one Orders v2 order with a purchase unit per seller, each with that seller's <code>payee</code>.</p></div>
+    <div class="step"><div class="n">3</div><h2>Buyer approves</h2><p>Only the human pays. PayPal collects the delivery address. One capture call, one capture per seller.</p></div>
+    <div class="step"><div class="n">4</div><h2>Each seller paid</h2><p>Money lands in each seller's own PayPal account. Each shop's Telegram bot sends an order card: items, address, contact, note.</p></div>
+  </div>
+  <div class="rules">
+    <div class="rule"><b>Prices from the server</b>The model sends product ids and quantities only; integer cents end to end.</div>
+    <div class="rule"><b>Safe retries</b><code>PayPal-Request-Id</code> on every POST, verified webhooks, stock taken exactly once.</div>
+    <div class="rule"><b>Paid means PayPal says so</b>Claude says "paid" only when <code>get_order_status</code> is COMPLETED.</div>
+  </div>
+</body></html>

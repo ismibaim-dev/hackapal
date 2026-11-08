@@ -46,7 +46,8 @@ describe('/mcp (marketplace)', () => {
     const create = tools.find((t) => t.name === 'create_order')!;
     expect(create.description).toMatch(/only the human buyer can pay/i);
     expect(create.description).toMatch(/never tell the buyer it is paid/i);
-    expect(create.description).toMatch(/may mix shops/i);
+    expect(create.description).toMatch(/ONE call, even from several shops/);
+    expect(create.description).toMatch(/Do not create one order per shop/);
     expect(Object.keys((create.inputSchema as { properties: object }).properties)).toEqual(['shop_id', 'items', 'note']);
   });
 

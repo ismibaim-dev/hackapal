@@ -31,6 +31,8 @@ const { values } = parseArgs({
     quantity: { type: 'string', default: '2' },
     // Any product of any shop; the order goes to the shop that sells it (e.g. eggs-30 for Kampung Fresh Mart).
     product: { type: 'string', default: 'choc-chip-cookies' },
+    // Optional buyer note for the seller, e.g. --note "Please deliver after 6pm".
+    note: { type: 'string' },
     'timeout-min': { type: 'string', default: '15' },
     'webhook-wait-sec': { type: 'string', default: '120' },
     'api-key': { type: 'string' },
@@ -85,6 +87,7 @@ async function main(): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       items: [{ product_id: productId, quantity }],
+      ...(values.note ? { note: values.note } : {}),
       ...(simulateDecline ? { simulate_decline: true } : {}),
     }),
   });

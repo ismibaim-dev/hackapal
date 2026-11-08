@@ -50,12 +50,14 @@ export interface Order {
   captureAttempts: number;
   /** Sandbox demo only: decline the next capture once, then clear. */
   simulateDecline: boolean;
+  /** The buyer's note for the seller (delivery time, gate code...), passed by the agent. Shown to the seller only. */
+  buyerNote: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export type NewOrder = Pick<Order, 'id' | 'paypalOrderId' | 'approvalUrl' | 'currency' | 'items' | 'totalCents'> &
-  Partial<Pick<Order, 'status' | 'simulateDecline'>>;
+  Partial<Pick<Order, 'status' | 'simulateDecline' | 'buyerNote'>>;
 
 /** Only lifecycle fields can change. Ids, items and totals are fixed once created. */
 export type OrderPatch = Partial<Pick<Order, 'status' | 'captureId' | 'captureAttempts' | 'simulateDecline'>>;
@@ -122,6 +124,7 @@ export class InMemoryOrderStore implements OrderStore {
       captureId: null,
       captureAttempts: 0,
       simulateDecline: input.simulateDecline ?? false,
+      buyerNote: input.buyerNote ?? null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };

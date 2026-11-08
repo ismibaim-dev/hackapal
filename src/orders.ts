@@ -208,7 +208,7 @@ export class OrderService {
    */
   async createOrder(
     input: CartInput,
-    options: { shopId?: string; simulateDecline?: boolean } = {},
+    options: { shopId?: string; simulateDecline?: boolean; note?: string } = {},
   ): Promise<CreateOrderResult> {
     const resolved = this.#resolveShop(input, options.shopId);
     if (!resolved.ok) return resolved;
@@ -227,6 +227,7 @@ export class OrderService {
       returnUrl: `${this.#baseUrl}/paypal/return`,
       cancelUrl: `${this.#baseUrl}/paypal/cancel`,
       ...(shop.payeeEmail ? { payeeEmail: shop.payeeEmail } : {}),
+      ...(shop.collectsAddress ? { collectAddress: true } : {}),
     });
     if (!paypalOrder.approvalUrl) {
       throw new Error(`PayPal order ${paypalOrder.id} has no payer-action or approve link`);
@@ -239,6 +240,7 @@ export class OrderService {
       items: quote.lines,
       totalCents: quote.totalCents,
       simulateDecline: Boolean(options.simulateDecline) && this.#allowSimulatedDecline,
+      buyerNote: cleanNote(options.note),
     });
     log.info('order created', {
       order_id: id,
@@ -246,6 +248,7 @@ export class OrderService {
       paypal_order_id: paypalOrder.id,
       total: formatUsd(order.totalCents),
       simulate_decline: order.simulateDecline,
+      has_note: order.buyerNote !== null,
     });
     return { ok: true, order, quote, shop };
   }
@@ -603,6 +606,15 @@ export class OrderService {
   }
 }
 
+/** Longest buyer note we keep; matches the column check in supabase/migrations. */
+export const MAX_NOTE_LENGTH = 300;
+
+/** Plain, single-spaced text, cut to MAX_NOTE_LENGTH; null when empty. */
+export function cleanNote(note: string | undefined): string | null {
+  const cleaned = (note ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned ? cleaned.slice(0, MAX_NOTE_LENGTH) : null;
+}
+
 function statusOutcome(status: OrderStatus): CaptureOutcome {
   switch (status) {
     case 'COMPLETED':
@@ -623,6 +635,8 @@ export interface OrderView {
   order_id: string;
   /** The seller. Absent only if the order's products no longer exist in any shop. */
   shop?: { shop_id: string; name: string };
+  /** The buyer's note for the seller, as stored. */
+  note?: string;
   status: OrderStatus;
   status_message: string;
   /** Present while the buyer still has something to do in PayPal. */
@@ -655,6 +669,7 @@ export function toOrderView(order: Order, shop?: Readonly<ShopInfo>): OrderView 
   return {
     order_id: order.id,
     ...(shop ? { shop: { shop_id: shop.id, name: shop.name } } : {}),
+    ...(order.buyerNote ? { note: order.buyerNote } : {}),
     status: order.status,
     status_message: STATUS_MESSAGES[order.status],
     ...(NEEDS_BUYER.has(order.status) ? { approval_url: order.approvalUrl } : {}),

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ShopInfo } from '../src/catalog.js';
 import { createCatalog } from '../src/catalog.js';
 import { createPlatform } from '../src/platform.js';
-import { canTransition, OrderService, toOrderView, type SellerNotifier } from '../src/orders.js';
+import { canTransition, cleanNote, MAX_NOTE_LENGTH, OrderService, toOrderView, type SellerNotifier } from '../src/orders.js';
 import { InMemoryOrderStore, ORDER_STATUSES, type Order } from '../src/store.js';
 import type { Buyer } from '../src/paypal.js';
 import { deferred, eventually, FakePayPal, paypalError } from './helpers.js';
@@ -478,5 +478,51 @@ describe('buyer details for the seller ping', () => {
     await eventually(() => pinged.length === 1);
     expect(pinged[0]?.order.status).toBe('COMPLETED');
     expect(pinged[0]?.buyer).toBeUndefined();
+  });
+});
+
+describe('delivery address and buyer note', () => {
+  function service() {
+    const paypal = new FakePayPal();
+    const store = new InMemoryOrderStore();
+    const pinged: Order[] = [];
+    const orders = new OrderService({
+      platform: createPlatform(),
+      store,
+      paypal,
+      publicBaseUrl: 'https://shop.example',
+      allowSimulatedDecline: true,
+      notifier: { orderCompleted: async (order) => void pinged.push(order) },
+    });
+    return { orders, paypal, store, pinged };
+  }
+
+  it('asks PayPal for an address only for shops that deliver', async () => {
+    const { orders, paypal } = service();
+    await orders.createOrder({ items: [{ product_id: 'eggs-30', quantity: 1 }] });
+    await orders.createOrder({ items: [{ product_id: 'kuih-lapis', quantity: 1 }] });
+    expect(paypal.createCalls[0]?.collectAddress).toBe(true);
+    expect(paypal.createCalls[1]).not.toHaveProperty('collectAddress');
+  });
+
+  it('stores a cleaned buyer note and hands it to the seller ping', async () => {
+    const { orders, paypal, pinged } = service();
+    const result = await orders.createOrder(
+      { items: [{ product_id: 'deep-clean-6h', quantity: 1 }] },
+      { note: '  Unit 5-2,\n\tparking B2   please  ' },
+    );
+    if (!result.ok) throw new Error('create failed');
+    expect(result.order.buyerNote).toBe('Unit 5-2, parking B2 please');
+    expect(orders.view(result.order).note).toBe('Unit 5-2, parking B2 please');
+    paypal.approve(result.order.paypalOrderId);
+    await orders.capture(result.order.id, 'return');
+    await eventually(() => pinged.length === 1);
+    expect(pinged[0]?.buyerNote).toBe('Unit 5-2, parking B2 please');
+  });
+
+  it('keeps no note when it is blank, and cuts a long one to the limit', () => {
+    expect(cleanNote('   \n ')).toBeNull();
+    expect(cleanNote(undefined)).toBeNull();
+    expect(cleanNote('x'.repeat(400))).toHaveLength(MAX_NOTE_LENGTH);
   });
 });

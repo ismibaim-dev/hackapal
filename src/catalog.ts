@@ -20,8 +20,10 @@ export interface ShopInfo {
   category: string;
   /** Where the seller operates (pickup, delivery or service area). */
   area: string;
-  /** How the buyer gets their order; there is no shipping step at checkout. */
+  /** How the buyer gets their order. */
   fulfilment: string;
+  /** Ask the buyer for a delivery or service address in PayPal at checkout. */
+  collectsAddress?: boolean;
   currency: Currency;
   /**
    * The seller's PayPal account (option B, design decision 16). Orders for this shop name it
@@ -124,9 +126,10 @@ export const KAMPUNG_FRESH_MART: Readonly<ShopSeed> = Object.freeze({
   category: 'Groceries',
   area: 'Shah Alam, Selangor',
   fulfilment:
-    'Same-day delivery within 5 km, or pickup at the shop. After payment the grocer confirms the delivery time.',
+    'Same-day delivery within 5 km. The buyer enters the delivery address in PayPal at checkout; after payment the grocer confirms the delivery time.',
   currency: 'USD',
   payeeEmail: 'sb-cjqou53656464@business.example.com',
+  collectsAddress: true,
   products: Object.freeze([
     { id: 'eggs-30', name: 'Grade A eggs', description: 'Fresh grade A chicken eggs from a local farm. Tray of 30.', unit: 'tray of 30', priceCents: 550, stock: 40 },
     { id: 'jasmine-rice-5kg', name: 'Jasmine rice', description: 'Fragrant long-grain jasmine rice. 5 kg bag.', unit: '5 kg bag', priceCents: 900, stock: 30 },
@@ -148,9 +151,10 @@ export const KILAT_HOME_CLEANING: Readonly<ShopSeed> = Object.freeze({
   category: 'Home cleaning',
   area: 'Petaling Jaya and Shah Alam, Selangor',
   fulfilment:
-    'Each unit is one booked visit, and stock is the number of open slots this week. After payment the team contacts the buyer to confirm the date, time and address.',
+    'Each unit is one booked visit, and stock is the number of open slots this week. The buyer enters the service address in PayPal at checkout; after payment the team confirms the date and time.',
   currency: 'USD',
   payeeEmail: 'sb-cjqou53656464@business.example.com',
+  collectsAddress: true,
   products: Object.freeze([
     { id: 'standard-clean-3h', name: 'Standard home clean', description: 'One cleaner for 3 hours: dusting, mopping, kitchen and bathrooms.', unit: '1 visit, 3 hours', priceCents: 4500, stock: 12 },
     { id: 'deep-clean-6h', name: 'Deep clean', description: 'Two cleaners for 6 hours, including inside cabinets, windows and grout.', unit: '1 visit, 6 hours', priceCents: 12000, stock: 6 },

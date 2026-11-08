@@ -107,14 +107,29 @@ export class TelegramNotifier implements SellerNotifier {
   }
 }
 
-/** e.g. "New order for Auntie's Kitchen! 2 x Chocolate chip cookies, $12.00, paid via PayPal." plus buyer and ids. */
+/**
+ * The seller's order card, plain text (no parse_mode, so nothing a buyer types can become
+ * markup). Items, total, where to deliver, how to reach the buyer and their note.
+ */
 export function formatOrderMessage(order: Order, shopName: string, buyer?: Buyer): string {
-  const items = order.items.map((i) => `${i.quantity} x ${i.name}`).join(', ');
-  const who = [buyer?.name, buyer?.email].filter(Boolean).join(', ');
-  return [
-    `New order for ${shopName}! ${items}, ${formatUsd(order.totalCents)}, paid via PayPal.`,
-    who ? `Buyer: ${who}` : 'Buyer: PayPal did not share contact details; check the payment in your PayPal account.',
-    `Order ${order.id}${order.captureId ? ` (PayPal capture ${order.captureId})` : ''}.`,
-    who ? 'Contact the buyer to arrange delivery, pickup or the booking.' : 'Arrange delivery, pickup or the booking with the buyer.',
-  ].join('\n');
+  const lines: string[] = [
+    `NEW ORDER - ${shopName}`,
+    `Order ${order.id}, paid ${formatUsd(order.totalCents)} via PayPal${order.captureId ? ` (capture ${order.captureId})` : ''}`,
+    '',
+    'Items',
+    ...order.items.map((i) => `  ${i.quantity} x ${i.name} (${formatUsd(i.unitPriceCents)} each)  ${formatUsd(i.lineTotalCents)}`),
+  ];
+
+  if (buyer?.shipTo) {
+    lines.push('', 'Deliver to / service address', ...[buyer.shipTo.name, ...buyer.shipTo.lines].filter(Boolean).map((l) => `  ${l}`));
+  }
+
+  const contact = [buyer?.name, buyer?.email, buyer?.phone].filter(Boolean);
+  lines.push('', 'Contact');
+  lines.push(...(contact.length > 0 ? contact.map((c) => `  ${c}`) : ['  PayPal did not share contact details; check the payment in your PayPal account.']));
+
+  if (order.buyerNote) lines.push('', 'Note from the buyer', `  ${order.buyerNote}`);
+
+  lines.push('', 'Please contact the buyer to confirm delivery, pickup or the booking time.');
+  return lines.join('\n');
 }

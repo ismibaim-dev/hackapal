@@ -1,6 +1,6 @@
 import express, { Router } from 'express';
 import { z } from 'zod';
-import type { OrderService } from './orders.js';
+import { MAX_NOTE_LENGTH, type OrderService } from './orders.js';
 import type { ShopProduct } from './platform.js';
 import { CartInputSchema } from './pricing.js';
 
@@ -12,6 +12,8 @@ import { CartInputSchema } from './pricing.js';
 const CreateOrderBody = CartInputSchema.extend({
   /** Optional: defaults to the shop that sells the items. */
   shop_id: z.string().trim().min(1).max(64).optional(),
+  /** Optional buyer note for the seller. */
+  note: z.string().trim().max(MAX_NOTE_LENGTH).optional(),
   /** Sandbox demo: make the first capture fail with INSTRUMENT_DECLINED. */
   simulate_decline: z.boolean().optional(),
 });
@@ -61,8 +63,8 @@ export function apiRoutes({ orders }: { orders: OrderService }): Router {
       });
       return;
     }
-    const { items, shop_id: shopId, simulate_decline: simulateDecline = false } = parsed.data;
-    const result = await orders.createOrder({ items }, { simulateDecline, ...(shopId ? { shopId } : {}) });
+    const { items, shop_id: shopId, note, simulate_decline: simulateDecline = false } = parsed.data;
+    const result = await orders.createOrder({ items }, { simulateDecline, ...(shopId ? { shopId } : {}), ...(note ? { note } : {}) });
     if (!result.ok) {
       res.status(422).json({ error: 'cannot_price_cart', issues: result.issues });
       return;

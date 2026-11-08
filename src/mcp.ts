@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { log } from './log.js';
 import { formatUsd } from './money.js';
 import type { ShopInfo } from './catalog.js';
-import type { OrderService } from './orders.js';
+import { MAX_NOTE_LENGTH, type OrderService } from './orders.js';
 import { PayPalHttpError } from './paypal-http.js';
 import type { ShopProduct } from './platform.js';
 import { RateLimiter } from './rate-limit.js';
@@ -72,6 +72,9 @@ function shopView(shop: Readonly<ShopInfo>) {
     area: shop.area,
     description: shop.description,
     fulfilment: shop.fulfilment,
+    delivery_address: shop.collectsAddress
+      ? 'The buyer enters it in PayPal at checkout. Do not ask for it in the chat.'
+      : 'Not collected: pickup or arranged with the seller after payment.',
     currency: shop.currency,
   };
 }
@@ -139,6 +142,16 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
     );
   }
 
+  const noteInput = z
+    .string()
+    .trim()
+    .max(MAX_NOTE_LENGTH)
+    .optional()
+    .describe(
+      `Optional note from the buyer to the seller, up to ${MAX_NOTE_LENGTH} characters: delivery time window, unit or gate number, ` +
+        'what the cleaner should focus on. Only what the buyer said; never payment details. The address itself is entered in PayPal.',
+    );
+
   const shopIdInput = z
     .string()
     .trim()
@@ -184,16 +197,22 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
         'Creates an order and a PayPal checkout for the buyer. Before calling it, confirm the items, quantities ' +
         'and the total (from list_products) with the buyer. ' +
         (scoped ? '' : 'One order holds items from one shop only; the seller is paid directly through PayPal. ') +
-        'The shop prices the order itself; you cannot set prices. Returns the order id, the itemised total and an ' +
+        'The shop prices the order itself; you cannot set prices. If the buyer mentions delivery timing or instructions for ' +
+        'the seller, pass them as note. Shops that deliver ask for the address in PayPal, so do not collect it in the chat. ' +
+        'Returns the order id, the itemised total and an ' +
         'approval_url. Give the approval_url to the buyer: only the human buyer can pay, by opening it and ' +
         'approving in PayPal. Creating the order does NOT mean it is paid. Never tell the buyer it is paid; ' +
         'check with get_order_status.',
       inputSchema: scoped
-        ? CartInputSchema.shape
-        : { shop_id: shopIdInput.optional().describe('shop_id from list_shops. Recommended; if left out, the shop of the items is used.'), ...CartInputSchema.shape },
+        ? { ...CartInputSchema.shape, note: noteInput }
+        : {
+            shop_id: shopIdInput.optional().describe('shop_id from list_shops. Recommended; if left out, the shop of the items is used.'),
+            ...CartInputSchema.shape,
+            note: noteInput,
+          },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (args: { shop_id?: string; items: CartInput['items'] }) => {
+    async (args: { shop_id?: string; items: CartInput['items']; note?: string }) => {
       const limits = options.limits;
       if (limits) {
         const perIp = limits.ordersPerIp.hit(clientKey);
@@ -208,7 +227,10 @@ export function createMcpServer(orders: OrderService, options: McpServerOptions 
       }
       const shopId = scoped?.id ?? args.shop_id;
       try {
-        const result = await orders.createOrder({ items: args.items }, shopId === undefined ? {} : { shopId });
+        const result = await orders.createOrder(
+          { items: args.items },
+          { ...(shopId === undefined ? {} : { shopId }), ...(args.note ? { note: args.note } : {}) },
+        );
         if (!result.ok) {
           return toolError('The order could not be created. Fix these issues and try again.', result.issues);
         }

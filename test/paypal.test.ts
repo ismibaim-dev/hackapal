@@ -87,6 +87,16 @@ describe('buildOrderRequest', () => {
       payeeEmail: 'seller@business.example.com',
     });
     expect(body.purchaseUnits[0]?.payee).toEqual({ emailAddress: 'seller@business.example.com' });
+    expect(body.paymentSource?.paypal?.experienceContext?.shippingPreference).toBe('NO_SHIPPING');
+    const delivering = buildOrderRequest({
+      orderId: 'ord_abc',
+      quote: quote(),
+      brandName: 'Kampung Fresh Mart',
+      returnUrl: 'https://shop.example/paypal/return',
+      cancelUrl: 'https://shop.example/paypal/cancel',
+      collectAddress: true,
+    });
+    expect(delivering.paymentSource?.paypal?.experienceContext?.shippingPreference).toBe('GET_FROM_FILE');
     expect(body.purchaseUnits[0]?.description).toBe('Kampung Fresh Mart order ord_abc');
   });
 
@@ -153,6 +163,29 @@ describe('summarize', () => {
       purchaseUnits: [{ customId: 'ord_test', payments: { captures: [{ id: 'CAP-1', status: 'COMPLETED' }] } }],
     });
     expect(summarize(captured as never)).toMatchObject({ status: 'COMPLETED', capture: { id: 'CAP-1', status: 'COMPLETED' } });
+  });
+
+  it('reads the delivery address and phone the buyer chose in PayPal', () => {
+    const shipped = sdkOrder({
+      status: 'COMPLETED',
+      paymentSource: { paypal: { emailAddress: 'siti@personal.example.com', name: { givenName: 'Siti', surname: 'Aminah' } } },
+      purchaseUnits: [
+        {
+          customId: 'ord_test',
+          shipping: {
+            name: { fullName: 'Siti Aminah' },
+            phoneNumber: { nationalNumber: '4085551234' },
+            address: { addressLine1: '1 Main St', adminArea2: 'San Jose', adminArea1: 'CA', postalCode: '95131', countryCode: 'US' },
+          },
+        },
+      ],
+    });
+    expect(summarize(shipped as never).buyer).toEqual({
+      name: 'Siti Aminah',
+      email: 'siti@personal.example.com',
+      phone: '4085551234',
+      shipTo: { name: 'Siti Aminah', lines: ['1 Main St', 'San Jose, CA 95131', 'US'] },
+    });
   });
 
   it('reads the buyer from payment_source.paypal, falling back to the deprecated payer', () => {

@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Currency } from './money.js';
+import { log } from './log.js';
 import {
   DuplicateOrderError,
   OrderNotFoundError,
@@ -30,6 +31,8 @@ interface OrderRow {
   capture_id: string | null;
   capture_attempts: number;
   simulate_decline: boolean;
+  /** Added by migration 20261108000000_buyer_note; absent until it has run. */
+  buyer_note?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -53,6 +56,7 @@ function toOrder(row: OrderRow): Order {
     captureId: row.capture_id,
     captureAttempts: row.capture_attempts,
     simulateDecline: row.simulate_decline,
+    buyerNote: row.buyer_note ?? null,
     // Postgres returns "+00:00"; normalise to the same ISO format as the in-memory store.
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
@@ -74,6 +78,11 @@ export interface SupabaseOrderStoreOptions {
   client?: SupabaseClient;
 }
 
+/** PostgREST's "column not in schema cache" (PGRST204) or Postgres's undefined column (42703). */
+function isMissingColumn(error: { code?: string; message?: string }, column: string): boolean {
+  return (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes(column);
+}
+
 export class SupabaseOrderStore implements OrderStore {
   readonly #db: SupabaseClient;
   readonly #now: () => Date;
@@ -86,23 +95,29 @@ export class SupabaseOrderStore implements OrderStore {
 
   async create(input: NewOrder): Promise<Order> {
     const timestamp = this.#now().toISOString();
-    const { data, error } = await this.#db
-      .from(TABLE)
-      .insert({
-        id: input.id,
-        paypal_order_id: input.paypalOrderId,
-        approval_url: input.approvalUrl,
-        currency: input.currency,
-        items: input.items,
-        total_cents: input.totalCents,
-        status: input.status ?? 'CREATED',
-        simulate_decline: input.simulateDecline ?? false,
-        created_at: timestamp,
-        updated_at: timestamp,
-      })
-      .select()
-      .single<OrderRow>();
-    if (error) {
+    const row = {
+      id: input.id,
+      paypal_order_id: input.paypalOrderId,
+      approval_url: input.approvalUrl,
+      currency: input.currency,
+      items: input.items,
+      total_cents: input.totalCents,
+      status: input.status ?? 'CREATED',
+      simulate_decline: input.simulateDecline ?? false,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    const insert = (values: object) => this.#db.from(TABLE).insert(values).select().single<OrderRow>();
+    let { data, error } = await insert(input.buyerNote ? { ...row, buyer_note: input.buyerNote } : row);
+    if (error && input.buyerNote && isMissingColumn(error, 'buyer_note')) {
+      // The migration hasn't run yet: keep taking orders, just without the note.
+      log.warn('orders.buyer_note column missing; order saved without the buyer note. Run supabase/migrations/20261108000000_buyer_note.sql', {
+        order_id: input.id,
+      });
+      ({ data, error } = await insert(row));
+    }
+    if (error || !data) {
+      if (!error) throw new StoreError('create', undefined, 'insert returned no row');
       if (error.code === '23505') throw new DuplicateOrderError(`Order already exists: ${error.details ?? error.message}`);
       throw new StoreError('create', error.code, error.message);
     }

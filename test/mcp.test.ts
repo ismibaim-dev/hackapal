@@ -47,7 +47,7 @@ describe('/mcp (marketplace)', () => {
     expect(create.description).toMatch(/only the human buyer can pay/i);
     expect(create.description).toMatch(/never tell the buyer it is paid/i);
     expect(create.description).toMatch(/one shop only/i);
-    expect(Object.keys((create.inputSchema as { properties: object }).properties)).toEqual(['shop_id', 'items']);
+    expect(Object.keys((create.inputSchema as { properties: object }).properties)).toEqual(['shop_id', 'items', 'note']);
   });
 
   it('list_shops returns every shop without the sellers\' PayPal accounts', async () => {
@@ -87,6 +87,23 @@ describe('/mcp (marketplace)', () => {
     expect(body).toMatchObject({ status: 'CREATED', total: '$11.00', shop: { shop_id: 'kampung-fresh-mart', name: 'Kampung Fresh Mart' } });
     expect(body.next_step).toContain('Kampung Fresh Mart');
     expect(paypal.createCalls[0]).toMatchObject({ brandName: 'Kampung Fresh Mart', payeeEmail: 'sb-cjqou53656464@business.example.com' });
+  });
+
+  it('create_order passes the buyer note to the seller, and asks PayPal for the address', async () => {
+    const { client, paypal } = await start();
+    const body = parse(
+      await client.callTool({
+        name: 'create_order',
+        arguments: { shop_id: 'kampung-fresh-mart', items: [{ product_id: 'veg-bundle', quantity: 1 }], note: 'After 6pm please' },
+      }),
+    );
+    expect(body.note).toBe('After 6pm please');
+    expect(paypal.createCalls[0]?.collectAddress).toBe(true);
+    const tooLong = (await client.callTool({
+      name: 'create_order',
+      arguments: { items: [{ product_id: 'veg-bundle', quantity: 1 }], note: 'x'.repeat(301) },
+    })) as ToolResult;
+    expect(tooLong.isError).toBe(true);
   });
 
   it('create_order refuses a cart that mixes shops, and points at the right shop for a foreign item', async () => {
@@ -165,8 +182,9 @@ describe('/s/<shop_id>/mcp (one shop)', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(['create_order', 'get_order_status', 'list_products']);
     const create = tools.find((t) => t.name === 'create_order')!;
-    expect(Object.keys((create.inputSchema as { properties: object }).properties)).toEqual(['items']);
+    expect(Object.keys((create.inputSchema as { properties: object }).properties)).toEqual(['items', 'note']);
     const body = parse(await client.callTool({ name: 'list_products', arguments: {} }));
+    expect(body.shop.delivery_address).toMatch(/enters it in PayPal/);
     expect(body.shop).toMatchObject({ shop_id: 'kilat-home-cleaning', category: 'Home cleaning' });
     expect(body.products.map((p: { product_id: string }) => p.product_id)).toEqual([
       'standard-clean-3h',

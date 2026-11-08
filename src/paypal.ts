@@ -53,6 +53,8 @@ export interface CreateOrderInput {
    * the API caller. Omitted: funds go to the account that owns our REST app.
    */
   payeeEmail?: string;
+  /** Ask the buyer for a delivery or service address in PayPal (GET_FROM_FILE). Default: no address. */
+  collectAddress?: boolean;
 }
 
 export interface CaptureOptions {
@@ -320,7 +322,7 @@ export class PayPalClient implements PayPalGateway {
   }
 }
 
-export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancelUrl, payeeEmail }: CreateOrderInput): OrderRequest {
+export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancelUrl, payeeEmail, collectAddress }: CreateOrderInput): OrderRequest {
   const currencyCode = quote.currency;
   return {
     intent: CheckoutPaymentIntent.Capture,
@@ -349,7 +351,10 @@ export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancel
         experienceContext: {
           brandName,
           userAction: PaypalExperienceUserAction.PayNow,
-          shippingPreference: PaypalWalletContextShippingPreference.NoShipping,
+          // GET_FROM_FILE: the buyer picks or adds an address in PayPal; it comes back on the purchase unit.
+          shippingPreference: collectAddress
+            ? PaypalWalletContextShippingPreference.GetFromFile
+            : PaypalWalletContextShippingPreference.NoShipping,
           returnUrl,
           cancelUrl,
         },
@@ -358,10 +363,13 @@ export function buildOrderRequest({ orderId, quote, brandName, returnUrl, cancel
   };
 }
 
-/** The paying buyer as PayPal reports them. Either field may be missing. */
+/** The paying buyer as PayPal reports them. Any field may be missing. */
 export interface Buyer {
   name?: string;
   email?: string;
+  phone?: string;
+  /** Delivery or service address the buyer chose in PayPal (shops that collect one). */
+  shipTo?: { name?: string; lines: string[] };
 }
 
 /**
@@ -369,14 +377,28 @@ export interface Buyer {
  * (the SDK marks payer as deprecated in favour of payment_source.paypal).
  */
 function buyerOf(order: SdkOrder): Buyer | undefined {
-  const source = order.paymentSource?.paypal ?? order.payer;
-  if (!source) return undefined;
-  const name = [source.name?.givenName, source.name?.surname].filter(Boolean).join(' ').trim();
+  const wallet = order.paymentSource?.paypal;
+  const source = wallet ?? order.payer;
+  const shipping = order.purchaseUnits?.[0]?.shipping;
+  const name = [source?.name?.givenName, source?.name?.surname].filter(Boolean).join(' ').trim();
+  const phone =
+    shipping?.phoneNumber?.nationalNumber ?? wallet?.phoneNumber?.nationalNumber ?? order.payer?.phone?.phoneNumber?.nationalNumber;
+  const address = shipping?.address;
+  const lines = address
+    ? [
+        address.addressLine1,
+        address.addressLine2,
+        [address.adminArea2, [address.adminArea1, address.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+        address.countryCode,
+      ].filter((line): line is string => Boolean(line && line.trim()))
+    : [];
   const buyer: Buyer = {
     ...(name ? { name } : {}),
-    ...(source.emailAddress ? { email: source.emailAddress } : {}),
+    ...(source?.emailAddress ? { email: source.emailAddress } : {}),
+    ...(phone ? { phone } : {}),
+    ...(lines.length > 0 ? { shipTo: { ...(shipping?.name?.fullName ? { name: shipping.name.fullName } : {}), lines } } : {}),
   };
-  return buyer.name || buyer.email ? buyer : undefined;
+  return Object.keys(buyer).length > 0 ? buyer : undefined;
 }
 
 export function summarize(order: SdkOrder | undefined): PayPalOrderSummary {

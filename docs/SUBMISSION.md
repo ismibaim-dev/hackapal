@@ -76,6 +76,69 @@ typescript, node.js, express, paypal-orders-v2, paypal-server-sdk, model-context
 
 ---
 
+## Devpost form answers
+
+### Demo URL
+
+`https://hackapal.onrender.com`. Use the home page, not `/mcp`: opening `/mcp` in a browser shows an error, because it only answers MCP clients. The home page lists the MCP links and the shops.
+
+### Explain how your project meets the main technology requirement
+
+**PayPal (sandbox):**
+- **Orders v2 REST API**, through PayPal's TypeScript server SDK (`@paypal/paypal-server-sdk`). The server creates and captures every order. Prices come from the server's catalog, never from the AI.
+- **Multi-seller payouts.** Each seller's purchase unit names that seller's own PayPal account as the `payee`. A cart from several shops becomes one order with a purchase unit per seller, so one buyer approval pays each seller directly (proven in sandbox with two different merchant ids).
+- **Shipping address collection** (`shipping_preference: GET_FROM_FILE`) for sellers who deliver. The address goes only to that seller.
+- **Webhooks** with signature verification (`verify-webhook-signature`), using the raw body. They handle `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED` and `PAYMENT.CAPTURE.DENIED`.
+- **Idempotency** (`PayPal-Request-Id` on every POST), OAuth token caching, `debug_id` logging, and **negative testing** with `PayPal-Mock-Response` to prove decline recovery (`INSTRUMENT_DECLINED` sends the buyer back to choose another way to pay).
+- **PayPal AI Toolkit:** its `paypal-best-practices` skill guided the integration (idempotency, tokens, webhooks, decline handling).
+
+**AI:**
+- **Claude (Anthropic)** is the shopping agent. It connects to hackapal as a custom MCP connector in claude.ai, lists shops and products, confirms the cart with the buyer, creates one order for the whole cart (including a delivery note), hands over the PayPal link, and checks payment status. It may only say "paid" when PayPal reports the capture as COMPLETED.
+- **Model Context Protocol:** our MCP server (`@modelcontextprotocol/sdk`, Streamable HTTP) is the AI interface. It has a marketplace endpoint and a per-shop endpoint for each seller.
+- **APIMatic ContextMatic** answered PayPal SDK questions during development (see its own field).
+
+### Which additional sponsor tool(s) did you use?
+
+**APIMatic Context Plugin.** We didn't use AG Grid.
+
+### How would you rate your overall experience integrating PayPal? (1-10)
+
+Your call. A fair 8 based on what we hit: the sandbox, Orders v2 and webhooks worked well, but the SDK's retry and token behaviour needed workarounds.
+
+### Overall experience: why
+
+Orders v2 and the sandbox made the core flow straightforward, and sandbox negative testing with `PayPal-Mock-Response` let us prove decline recovery without real cards. Multiple purchase units with different payees worked in sandbox, which made a one-checkout, many-sellers flow possible. Friction points: with retries enabled, the TypeScript server SDK retried every declared 4xx error, so a declined card took about 9 seconds and was attempted four times. A single failed token fetch also left the SDK client failing until it was rebuilt. Events from the webhook simulator can't pass signature verification, so every webhook test needs a real sandbox payment. Clearer docs on whether multi-payee orders need a partner agreement in production would help.
+
+### APIMatic Context Plugin experience
+
+ContextMatic was our first stop before writing PayPal code. `fetch_api`, `model_search` and `endpoint_search` gave the exact TypeScript SDK shapes we needed: OrdersController methods, camelCase models, `paypalMockResponse` for negative testing, token provider hooks, and later the `payee`, shipping and payer fields. That was faster than reading generated docs. Issues: several `ask` calls returned errors and had to be split into smaller questions. Two answers were wrong when checked against the installed SDK source: the error body field is `debug_id`, not `debugId`, and the retry defaults mean no retry happens even after raising `maxNumberOfRetries`. It also couldn't say whether one order may pay several merchants, so we proved that with a live probe. Overall it made us faster and pointed us to the right models, but we treated its answers as leads to verify, not ground truth. Every use is logged in `docs/BUILD_LOG.md`.
+
+### Which AI tools have you leveraged while working on this project?
+
+- **Claude Code (Anthropic):** pair-programmed the codebase, tests, scripts and docs, and drove the live sandbox probes.
+- **Claude in claude.ai (Anthropic):** the shopping agent in the product and the demo, through our MCP connector.
+- **APIMatic ContextMatic:** PayPal SDK context.
+- **PayPal AI Toolkit (`paypal-best-practices` skill):** PayPal integration guidance.
+
+### Project media
+
+- Thumbnail: `docs/media/thumbnail.png` (1500x1000, 3:2).
+- Gallery, in this order:
+  1. `thumbnail.png`
+  2. `how-it-works.png`
+  3. `home-page.png` (the live directory)
+  4. your claude.ai screenshot of the one-link $19.00 checkout
+  5. the PayPal approval screen
+  6. the two Telegram order cards
+  7. each seller's sandbox account activity
+
+  Items 4-7 should be your own real screenshots.
+- File upload: not needed. The repo and video carry everything.
+
+### Eligibility checkboxes
+
+Tick them only if they're true for you: age of majority, an eligible jurisdiction (check the hackathon rules for your country), and not affiliated with the sponsors.
+
 ## Testing instructions for judges (Devpost field)
 
 Write the sandbox buyer login here on Devpost only. **Never commit it to the repo.**

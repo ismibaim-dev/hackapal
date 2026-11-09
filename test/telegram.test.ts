@@ -26,6 +26,9 @@ const order: Order = {
   captureAttempts: 0,
   simulateDecline: false,
   buyerNote: null,
+  sellersPinged: [],
+  pingPending: true,
+  pingAttempts: 0,
   createdAt: '2026-11-02T03:17:00.000Z',
   updatedAt: '2026-11-02T03:19:36.000Z',
 };
@@ -148,7 +151,7 @@ describe('TelegramNotifier', () => {
     const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { n } = notifier(() => jsonResponse(200, { ok: true }));
-    await n.orderCompleted(order, AUNTIES_KITCHEN, { name: 'Siti Aminah', email: 'siti@personal.example.com' });
+    await expect(n.orderCompleted(order, AUNTIES_KITCHEN, { name: 'Siti Aminah', email: 'siti@personal.example.com' })).resolves.toBe(true);
     const logged = [...out.mock.calls, ...errors.mock.calls].map((c) => String(c[0])).join('\n');
     expect(logged).toContain('seller pinged on telegram');
     expect(logged).not.toContain('siti@');
@@ -180,7 +183,7 @@ describe('TelegramNotifier', () => {
     process.env.LOG_LEVEL = 'warn';
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { n, calls } = notifier(() => jsonResponse(400, { ok: false, error_code: 400, description: 'Bad Request: chat not found' }));
-    await expect(n.orderCompleted(order, AUNTIES_KITCHEN)).resolves.toBeUndefined();
+    await expect(n.orderCompleted(order, AUNTIES_KITCHEN)).resolves.toBe(false);
     expect(calls).toHaveLength(1);
     const logged = errors.mock.calls.map((c) => String(c[0])).join('\n');
     expect(logged).toContain('chat not found');
@@ -191,7 +194,7 @@ describe('TelegramNotifier', () => {
     const { n, calls } = notifier(() => {
       throw new TypeError('fetch failed');
     });
-    await expect(n.orderCompleted(order, AUNTIES_KITCHEN)).resolves.toBeUndefined();
+    await expect(n.orderCompleted(order, AUNTIES_KITCHEN)).resolves.toBe(false);
     expect(calls).toHaveLength(3);
   });
 });

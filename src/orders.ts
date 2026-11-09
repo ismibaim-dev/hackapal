@@ -6,7 +6,7 @@ import { PayPalHttpError } from './paypal-http.js';
 import { platformFromCatalogs, type Platform, type ShopProduct } from './platform.js';
 import { priceCart, type CartInput, type PricingIssue, type Quote } from './pricing.js';
 import { CatalogStockStore, type StockStore } from './stock.js';
-import { FINAL_STATUSES, newOrderId, type Order, type OrderStatus, type OrderStore } from './store.js';
+import { FINAL_STATUSES, newOrderId, type Order, type OrderPatch, type OrderStatus, type OrderStore } from './store.js';
 
 /**
  * The money path, shared by the PayPal return page, the webhook, the internal
@@ -94,9 +94,27 @@ function combineQuotes(quotes: Quote[]): Quote {
 const CAPTURE_DONE = new Set(['COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED']);
 const CAPTURE_FAILED = new Set(['DECLINED', 'FAILED']);
 
-/** Told once per order, when it moves to COMPLETED. `buyer` is who paid, when PayPal says. */
+/**
+ * Told when an order moves to COMPLETED, once per paid seller. `buyer` is who paid, when PayPal
+ * says. Resolve `false` when the seller wasn't reached: the order then stays pending and the
+ * retry sweep (retrySellerPings) tries again. Anything else counts as delivered.
+ */
 export interface SellerNotifier {
-  orderCompleted(order: Order, shop: Readonly<ShopInfo>, buyer?: Buyer): Promise<void>;
+  orderCompleted(order: Order, shop: Readonly<ShopInfo>, buyer?: Buyer): Promise<boolean | void>;
+}
+
+/** Retry sweeps per order before we stop and log loudly (one sweep every few minutes). */
+export const MAX_PING_ATTEMPTS = 12;
+/** Orders handled per sweep. */
+const PING_SWEEP_BATCH = 50;
+
+export interface PingSweepResult {
+  /** Orders the sweep looked at. */
+  checked: number;
+  /** Orders whose sellers are now all pinged. */
+  delivered: number;
+  /** Orders given up on after MAX_PING_ATTEMPTS. */
+  abandoned: number;
 }
 
 export type OrderServiceOptions = (
@@ -155,6 +173,9 @@ export class OrderService {
   readonly #captures = new Map<string, Promise<CaptureResult>>();
   readonly #locks = new Map<string, Promise<unknown>>();
   readonly #seenEvents = new Set<string>();
+  /** Orders whose sellers are being pinged right now, so the sweep and the inline ping never overlap. */
+  readonly #notifying = new Set<string>();
+  #sweeping = false;
   /** Verified webhook events per order, newest last. Evidence for T1b; in memory only. */
   readonly #webhookLog = new Map<string, WebhookRecord[]>();
 
@@ -618,7 +639,7 @@ export class OrderService {
     buyer?: Buyer,
     paid?: UnitCapture[],
   ): Promise<{ order: Order; changed: boolean }> {
-    const result = await this.#transition(orderId, 'COMPLETED', { captureId });
+    const result = await this.#transition(orderId, 'COMPLETED', { captureId, ...(this.#notifier ? { pingPending: true } : {}) });
     if (!result.changed) return result;
     const shops = this.shopsForOrder(result.order);
     const captureFor = new Map<string, string>(
@@ -644,31 +665,132 @@ export class OrderService {
       }
     }
     log.info('order completed', { order_id: orderId, capture_id: captureId, total: formatUsd(result.order.totalCents) });
-    if (this.#notifier && shops.length > 0) {
-      const notifier = this.#notifier;
-      const order = result.order;
-      // Fire and forget: the seller pings never delay or fail the payment. Each paid seller
-      // gets only their own lines, total and capture.
-      (async () => {
-        const who = buyer ?? (await this.#buyerFor(order));
-        for (const shop of shops) {
-          const shopCapture = captureFor.get(shop.id);
-          if (shops.length > 1 && !shopCapture) continue;
+    // Fire and forget: the seller pings never delay or fail the payment. A seller who isn't
+    // reached stays recorded as pending and is retried by retrySellerPings.
+    void this.#notifySellers(result.order, captureFor, { buyer, lookUpBuyer: true }).catch((err: unknown) => {
+      log.warn('seller notification failed', { order_id: orderId, err });
+    });
+    return result;
+  }
+
+  /**
+   * Ping each paid seller not pinged yet, recording each success on the order, and clear
+   * pingPending once all are done. Each seller gets only their own lines, total and capture.
+   * `captureFor` maps shop id to its capture; in a combined checkout only those shops were paid.
+   * Returns true when every paid seller has now been pinged.
+   */
+  async #notifySellers(
+    order: Order,
+    captureFor: ReadonlyMap<string, string>,
+    { buyer, lookUpBuyer }: { buyer?: Buyer; lookUpBuyer: boolean },
+  ): Promise<boolean> {
+    const notifier = this.#notifier;
+    if (!notifier || this.#notifying.has(order.id)) return false;
+    this.#notifying.add(order.id);
+    try {
+      const shops = this.shopsForOrder(order);
+      const paid = shops.filter((s) => shops.length <= 1 || captureFor.has(s.id));
+      const pinged = [...order.sellersPinged];
+      const todo = paid.filter((s) => !pinged.includes(s.id));
+      if (todo.length > 0) {
+        const who = buyer ?? (lookUpBuyer ? await this.#buyerFor(order) : undefined);
+        for (const shop of todo) {
           const items = order.items.filter((i) => this.#platform.shopOfProduct(i.productId)?.id === shop.id);
           const slice: Order = {
             ...order,
             items,
             totalCents: sumCents(items.map((i) => i.lineTotalCents)),
-            captureId: shopCapture ?? order.captureId,
+            captureId: captureFor.get(shop.id) ?? order.captureId,
           };
-          await notifier.orderCompleted(slice, shop, who).catch((err: unknown) => {
-            log.warn('seller notification failed', { order_id: orderId, shop_id: shop.id, err });
+          const reached = await notifier.orderCompleted(slice, shop, who).then(
+            (answer) => answer !== false,
+            (err: unknown) => {
+              log.warn('seller notification failed', { order_id: order.id, shop_id: shop.id, err });
+              return false;
+            },
+          );
+          if (!reached) continue;
+          pinged.push(shop.id);
+          await this.#saveQuietly(order.id, { sellersPinged: [...pinged] });
+        }
+      }
+      const done = paid.every((s) => pinged.includes(s.id));
+      if (done && order.pingPending) await this.#saveQuietly(order.id, { pingPending: false });
+      if (!done) {
+        log.warn('seller ping pending, will retry', {
+          order_id: order.id,
+          missing: paid.filter((s) => !pinged.includes(s.id)).map((s) => s.id),
+        });
+      }
+      return done;
+    } finally {
+      this.#notifying.delete(order.id);
+    }
+  }
+
+  /** Ping bookkeeping must never throw into the payment path; a failed write is retried later. */
+  async #saveQuietly(orderId: string, patch: OrderPatch): Promise<void> {
+    try {
+      await this.#store.update(orderId, patch);
+    } catch (err) {
+      log.warn('could not record seller ping state', { order_id: orderId, err });
+    }
+  }
+
+  /**
+   * Retry sellers who weren't reached when their order was paid (Telegram down, a restart
+   * mid-ping). Run on a timer. Each pass re-reads the order from PayPal for the buyer and,
+   * in a combined checkout, which sellers were actually paid. After MAX_PING_ATTEMPTS passes
+   * an order is dropped with an error log, so a permanently broken chat can't loop forever.
+   */
+  async retrySellerPings(): Promise<PingSweepResult> {
+    const result: PingSweepResult = { checked: 0, delivered: 0, abandoned: 0 };
+    if (!this.#notifier || this.#sweeping) return result;
+    this.#sweeping = true;
+    try {
+      for (const order of await this.#store.listPingsPending(PING_SWEEP_BATCH)) {
+        if (this.#notifying.has(order.id)) continue;
+        result.checked += 1;
+        if (order.pingAttempts >= MAX_PING_ATTEMPTS) {
+          await this.#saveQuietly(order.id, { pingPending: false });
+          log.error('seller ping abandoned: seller was never told about this paid order', {
+            order_id: order.id,
+            attempts: order.pingAttempts,
+            pinged: order.sellersPinged,
+          });
+          result.abandoned += 1;
+          continue;
+        }
+        await this.#saveQuietly(order.id, { pingAttempts: order.pingAttempts + 1 });
+        const current = { ...order, pingAttempts: order.pingAttempts + 1 };
+
+        let summary: PayPalOrderSummary | undefined;
+        try {
+          summary = await this.#paypal.getOrder(order.paypalOrderId);
+        } catch (err) {
+          log.warn('ping retry: could not read the order from PayPal', {
+            order_id: order.id,
+            debug_id: err instanceof PayPalHttpError ? err.debugId : undefined,
           });
         }
-      })().catch((err: unknown) => {
-        log.warn('seller notification failed', { order_id: orderId, err });
-      });
+        const shops = this.shopsForOrder(order);
+        let captureFor: Map<string, string>;
+        if (shops.length <= 1) {
+          captureFor = new Map(shops.map((s) => [s.id, order.captureId ?? 'unknown']));
+        } else if (summary?.captures) {
+          captureFor = new Map(summary.captures.filter((c) => CAPTURE_DONE.has(c.status)).map((c) => [c.referenceId, c.id]));
+        } else {
+          // Without PayPal we can't tell which sellers in a combined checkout were paid. Next pass.
+          continue;
+        }
+        if (await this.#notifySellers(current, captureFor, { ...(summary?.buyer ? { buyer: summary.buyer } : {}), lookUpBuyer: false })) {
+          result.delivered += 1;
+        }
+      }
+    } finally {
+      this.#sweeping = false;
     }
+    if (result.checked > 0) log.info('seller ping retry sweep', { ...result });
     return result;
   }
 
@@ -695,7 +817,7 @@ export class OrderService {
   #transition(
     orderId: string,
     to: OrderStatus,
-    extra: { captureId?: string } = {},
+    extra: { captureId?: string; pingPending?: boolean } = {},
   ): Promise<{ order: Order; changed: boolean }> {
     return this.#withLock(orderId, async () => {
       const current = await this.#mustGet(orderId);

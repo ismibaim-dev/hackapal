@@ -89,6 +89,20 @@ for (const [name, make, enabled] of stores) {
       expect(await store.get(created.id)).toEqual(updated);
     });
 
+    it('tracks seller pings and lists completed orders still waiting for one', async () => {
+      const store = make();
+      const a = await store.create(newOrder());
+      expect(a).toMatchObject({ sellersPinged: [], pingPending: false, pingAttempts: 0 });
+      const b = await store.create(newOrder());
+      await store.update(a.id, { status: 'COMPLETED', pingPending: true });
+      await store.update(b.id, { status: 'COMPLETED', pingPending: true, sellersPinged: ['aunties-kitchen'], pingAttempts: 3 });
+      await store.update(b.id, { pingPending: false });
+      const pending = (await store.listPingsPending(500)).map((o) => o.id);
+      expect(pending).toContain(a.id);
+      expect(pending).not.toContain(b.id);
+      expect(await store.get(b.id)).toMatchObject({ sellersPinged: ['aunties-kitchen'], pingAttempts: 3, pingPending: false });
+    });
+
     it('rejects duplicate ids and PayPal order ids, and unknown updates', async () => {
       const store = make();
       const first = newOrder();

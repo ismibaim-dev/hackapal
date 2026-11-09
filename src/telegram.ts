@@ -7,8 +7,8 @@ import type { FetchLike } from './paypal-http.js';
 import type { Order } from './store.js';
 
 /**
- * Seller ping on Telegram: one message per order, sent when its capture completes
- * (OrderService calls orderCompleted exactly once, on the move to COMPLETED).
+ * Seller ping on Telegram: one message per paid seller, sent when the capture completes. A
+ * failure resolves false, and OrderService's retry sweep tries again later.
  * Each shop's ping goes to that shop's own chat (TELEGRAM_SHOP_CHATS), sent by that shop's own
  * bot when it has one (TELEGRAM_BOT_TOKEN_<SHOP>), or by the default bot to the default chat
  * when the shop has none. The message names the shop and, when PayPal says, the buyer,
@@ -70,7 +70,8 @@ export class TelegramNotifier implements SellerNotifier {
     return { chatId, ownChat, ownBot };
   }
 
-  async orderCompleted(order: Order, shop: Readonly<ShopInfo>, buyer?: Buyer): Promise<void> {
+  /** True when Telegram accepted the message; false when the seller wasn't reached (retried later). */
+  async orderCompleted(order: Order, shop: Readonly<ShopInfo>, buyer?: Buyer): Promise<boolean> {
     const text = formatOrderMessage(order, shop.name, buyer);
     const { url, chatId, ownChat, ownBot } = this.#routeFor(shop.id);
     const body = JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true });
@@ -87,7 +88,7 @@ export class TelegramNotifier implements SellerNotifier {
           | undefined;
         if (res.ok && json?.ok) {
           log.info('seller pinged on telegram', { order_id: order.id, shop_id: shop.id, shop_chat: ownChat, shop_bot: ownBot, buyer_known: Boolean(buyer) });
-          return;
+          return true;
         }
         description = json?.description;
         retryAfterSeconds = json?.parameters?.retry_after;
@@ -102,7 +103,7 @@ export class TelegramNotifier implements SellerNotifier {
       }
       // Never include the URL: it carries the bot token.
       log.warn('telegram ping failed', { order_id: order.id, status, description });
-      return;
+      return false;
     }
   }
 }

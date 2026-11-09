@@ -52,6 +52,12 @@ export interface Order {
   simulateDecline: boolean;
   /** The buyer's note for the seller (delivery time, gate code...), passed by the agent. Shown to the seller only. */
   buyerNote: string | null;
+  /** Shop ids whose seller has been told about this paid order (one per paid seller). */
+  sellersPinged: string[];
+  /** True from COMPLETED until every paid seller has been pinged (or retries ran out). */
+  pingPending: boolean;
+  /** Retry sweeps that have tried to ping this order's sellers. */
+  pingAttempts: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -60,9 +66,11 @@ export type NewOrder = Pick<Order, 'id' | 'paypalOrderId' | 'approvalUrl' | 'cur
   Partial<Pick<Order, 'status' | 'simulateDecline' | 'buyerNote'>>;
 
 /** Only lifecycle fields can change. Ids, items and totals are fixed once created. */
-export type OrderPatch = Partial<Pick<Order, 'status' | 'captureId' | 'captureAttempts' | 'simulateDecline'>>;
+export type OrderPatch = Partial<
+  Pick<Order, 'status' | 'captureId' | 'captureAttempts' | 'simulateDecline' | 'sellersPinged' | 'pingPending' | 'pingAttempts'>
+>;
 
-const PATCHABLE_KEYS = ['status', 'captureId', 'captureAttempts', 'simulateDecline'] as const;
+const PATCHABLE_KEYS = ['status', 'captureId', 'captureAttempts', 'simulateDecline', 'sellersPinged', 'pingPending', 'pingAttempts'] as const;
 
 /** Persistence boundary. Async on purpose: the in-memory version is swapped for Supabase later. */
 export interface OrderStore {
@@ -72,6 +80,8 @@ export interface OrderStore {
   getByPayPalOrderId(paypalOrderId: string): Promise<Order | undefined>;
   /** Throws OrderNotFoundError if the order doesn't exist. */
   update(id: string, patch: OrderPatch): Promise<Order>;
+  /** COMPLETED orders whose sellers aren't all pinged yet, oldest first. */
+  listPingsPending(limit: number): Promise<Order[]>;
 }
 
 export class OrderNotFoundError extends Error {
@@ -125,6 +135,9 @@ export class InMemoryOrderStore implements OrderStore {
       captureAttempts: 0,
       simulateDecline: input.simulateDecline ?? false,
       buyerNote: input.buyerNote ?? null,
+      sellersPinged: [],
+      pingPending: false,
+      pingAttempts: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -151,8 +164,16 @@ export class InMemoryOrderStore implements OrderStore {
     for (const key of PATCHABLE_KEYS) {
       if (patch[key] !== undefined) Object.assign(changes, { [key]: patch[key] });
     }
-    const updated: Order = { ...order, ...changes, updatedAt: this.#now().toISOString() };
+    const updated: Order = { ...structuredClone(order), ...structuredClone(changes), updatedAt: this.#now().toISOString() };
     this.#orders.set(id, updated);
     return structuredClone(updated);
+  }
+
+  async listPingsPending(limit: number): Promise<Order[]> {
+    return [...this.#orders.values()]
+      .filter((o) => o.status === 'COMPLETED' && o.pingPending)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(0, limit)
+      .map((o) => structuredClone(o));
   }
 }

@@ -9,6 +9,9 @@ import { CatalogStockStore, SupabaseStockStore, type StockStore } from './stock.
 import { createSupabaseServerClient, SupabaseOrderStore } from './supabase-store.js';
 import { TelegramNotifier } from './telegram.js';
 
+/** How often failed seller pings are retried. With MAX_PING_ATTEMPTS that covers about an hour. */
+const PING_SWEEP_INTERVAL_MS = 5 * 60_000;
+
 loadDotEnv();
 
 let config: AppConfig;
@@ -47,6 +50,16 @@ if (hasPayPalCredentials(config)) {
   });
 } else {
   log.warn('PayPal credentials missing: order, PayPal and webhook routes answer 503');
+}
+// Retry seller pings that failed (Telegram down, a restart mid-ping). Timers are unref'd so
+// they never keep the process alive on shutdown.
+if (deps.orders && config.telegram) {
+  const orders = deps.orders;
+  const sweep = () => {
+    orders.retrySellerPings().catch((err: unknown) => log.warn('seller ping sweep failed', { err }));
+  };
+  setTimeout(sweep, 30_000).unref();
+  setInterval(sweep, PING_SWEEP_INTERVAL_MS).unref();
 }
 if (!config.paypal.webhookId) log.warn('PAYPAL_WEBHOOK_ID not set: webhooks will be refused (503)');
 

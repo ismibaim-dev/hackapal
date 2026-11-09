@@ -33,6 +33,10 @@ interface OrderRow {
   simulate_decline: boolean;
   /** Added by migration 20261108000000_buyer_note; absent until it has run. */
   buyer_note?: string | null;
+  /** Added by migration 20261110000000_seller_pings; absent until it has run. */
+  sellers_pinged?: string[] | null;
+  ping_pending?: boolean | null;
+  ping_attempts?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +61,9 @@ function toOrder(row: OrderRow): Order {
     captureAttempts: row.capture_attempts,
     simulateDecline: row.simulate_decline,
     buyerNote: row.buyer_note ?? null,
+    sellersPinged: row.sellers_pinged ?? [],
+    pingPending: row.ping_pending ?? false,
+    pingAttempts: row.ping_attempts ?? 0,
     // Postgres returns "+00:00"; normalise to the same ISO format as the in-memory store.
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
@@ -83,9 +90,14 @@ function isMissingColumn(error: { code?: string; message?: string }, column: str
   return (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes(column);
 }
 
+const PING_COLUMNS = ['sellers_pinged', 'ping_pending', 'ping_attempts'] as const;
+const PING_MIGRATION = 'supabase/migrations/20261110000000_seller_pings.sql';
+
 export class SupabaseOrderStore implements OrderStore {
   readonly #db: SupabaseClient;
   readonly #now: () => Date;
+  /** False once we learn the seller-ping columns don't exist yet (migration not run). */
+  #pingColumns = true;
 
   constructor(options: SupabaseOrderStoreOptions) {
     this.#db =
@@ -139,11 +151,49 @@ export class SupabaseOrderStore implements OrderStore {
     if (patch.captureId !== undefined) changes.capture_id = patch.captureId;
     if (patch.captureAttempts !== undefined) changes.capture_attempts = patch.captureAttempts;
     if (patch.simulateDecline !== undefined) changes.simulate_decline = patch.simulateDecline;
+    const pingChanges: Record<string, unknown> = {};
+    if (patch.sellersPinged !== undefined) pingChanges.sellers_pinged = patch.sellersPinged;
+    if (patch.pingPending !== undefined) pingChanges.ping_pending = patch.pingPending;
+    if (patch.pingAttempts !== undefined) pingChanges.ping_attempts = patch.pingAttempts;
+    const withPings = this.#pingColumns && Object.keys(pingChanges).length > 0;
 
-    const { data, error } = await this.#db.from(TABLE).update(changes).eq('id', id).select().maybeSingle<OrderRow>();
+    const run = (values: Record<string, unknown>) =>
+      this.#db.from(TABLE).update(values).eq('id', id).select().maybeSingle<OrderRow>();
+    let { data, error } = await run(withPings ? { ...changes, ...pingChanges } : changes);
+    if (error && withPings && PING_COLUMNS.some((c) => isMissingColumn(error!, c))) {
+      // The migration hasn't run: never let ping bookkeeping block a payment status change.
+      this.#missingPingColumns();
+      ({ data, error } = await run(changes));
+    }
     if (error) throw new StoreError('update', error.code, error.message);
     if (!data) throw new OrderNotFoundError(id);
     return toOrder(data);
+  }
+
+  async listPingsPending(limit: number): Promise<Order[]> {
+    if (!this.#pingColumns) return [];
+    const { data, error } = await this.#db
+      .from(TABLE)
+      .select('*')
+      .eq('status', 'COMPLETED')
+      .eq('ping_pending', true)
+      .order('created_at', { ascending: true })
+      .limit(limit);
+    if (error) {
+      if (PING_COLUMNS.some((c) => isMissingColumn(error, c))) {
+        this.#missingPingColumns();
+        return [];
+      }
+      throw new StoreError('read', error.code, error.message);
+    }
+    return (data as OrderRow[]).map(toOrder);
+  }
+
+  #missingPingColumns(): void {
+    if (this.#pingColumns) {
+      log.warn(`orders seller-ping columns missing; failed seller pings won't be retried until ${PING_MIGRATION} is run`);
+    }
+    this.#pingColumns = false;
   }
 
   /** Cheap reachability check for diagnostics (never used by /health, which must stay fast). */

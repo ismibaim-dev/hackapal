@@ -120,6 +120,16 @@ Added in session 2, while building Phase 1:
     - The Telegram message is now an order card: items with unit prices, total, address, contact (name, email, phone if PayPal shares it), the note, and a closing call to action.
     - Sandbox buyers have US addresses, so the demo shows one; phone numbers appear only when the merchant account asks PayPal for them.
 
+20. **A failed seller ping is retried, not just logged** (Baim, 2026-11-10: "fix it").
+    - Before: after two Telegram retries the ping only logged `telegram ping failed`, so a seller could miss a paid order and nobody would know.
+    - Now each order records `sellers_pinged` (shop ids reached), `ping_pending` (set in the same write that moves it to `COMPLETED`, cleared when every paid seller is reached) and `ping_attempts`. Migration `20261110000000_seller_pings.sql`.
+    - A sweep every 5 minutes (first one 30 s after start) retries pending orders. Each pass re-reads the order from PayPal for the buyer's details and, in a combined checkout, which sellers' captures completed, so a seller whose capture failed is never pinged. Only sellers not yet reached are pinged again.
+    - After 12 passes (about an hour) the order is dropped with an error log `seller ping abandoned`, so a broken chat (bot removed, wrong id) can't loop forever.
+    - The sweep and the inline ping never run for the same order at once (in-process guard; one Render instance).
+    - **Deploy order doesn't matter:** until the migration runs, the Supabase store notices the missing columns, saves the payment status without them and logs one warning. Payments are never blocked by ping bookkeeping; pings just aren't retried yet.
+    - Pings still happen while the instance is awake: on the free plan the sweep only runs while the uptime pinger keeps it up.
+    - `GET /api/orders/:id` shows `sellers_pinged` and `seller_ping_pending`.
+
 Assumptions (change them if wrong):
 
 - `shipping_preference: NO_SHIPPING` for Auntie's Kitchen (pickup or arranged after payment); `GET_FROM_FILE` for shops that deliver (design decision 19).
@@ -288,6 +298,12 @@ Assumptions (change them if wrong):
   1. A webhook event id was remembered before processing, so PayPal's redelivery of an event whose first attempt failed (PayPal 5xx, store outage) was skipped as a duplicate. The id is now forgotten if processing throws.
   2. `cleanNote` cut the buyer note with `slice(0, 300)`, which can split an emoji and leave a lone surrogate. Postgres rejects that in JSON, and Telegram would likely reject it too, so a note with an emoji at the cut could fail `create_order` after the PayPal order already existed. The note is now cut by code point (matching the column's `char_length` check) and stray surrogates are replaced.
 - **Not changed, for Baim to decide (see the PR description):** no durable record of whether the seller was pinged; oversold lines aren't shown on the seller's card; `/webhooks/paypal` has no rate limit; the per-IP `/mcp` limits key on `req.ip`, which may be a shared proxy or claude.ai egress address.
+
+### Seller ping retries (2026-11-10)
+
+- Design decision 20. `SellerNotifier.orderCompleted` now resolves `false` when the seller wasn't reached (Telegram returns it after its own retries). `OrderService.retrySellerPings()` runs on a timer from `server.ts`.
+- **Tests:** 233 passing (11 new), 5 skipped (live Supabase). New: delivered ping leaves nothing pending; failed ping delivered by the next sweep; a throwing notifier counts as not delivered; combined checkout re-pings only the missed seller; a seller whose capture failed is never pinged; give-up after `MAX_PING_ATTEMPTS`; no notifier means nothing pending; store contract for the new fields; Supabase store before the migration (status still saved, columns skipped, sweep empty).
+- **Needs Baim:** run `supabase/migrations/20261110000000_seller_pings.sql` in the Supabase SQL editor for project `hackapal`. Safe on the live table (every column has a default). Not proven live yet: a paid order with Telegram temporarily broken, then fixed, should be pinged within about 5 minutes.
 
 ## Handoff (latest, 2026-11-06)
 

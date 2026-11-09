@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ShopInfo } from '../src/catalog.js';
 import { createCatalog } from '../src/catalog.js';
 import { createPlatform } from '../src/platform.js';
-import { canTransition, cleanNote, MAX_NOTE_LENGTH, OrderService, toOrderView, type SellerNotifier } from '../src/orders.js';
+import { canTransition, cleanNote, MAX_NOTE_LENGTH, MAX_PING_ATTEMPTS, OrderService, toOrderView, type SellerNotifier } from '../src/orders.js';
 import { InMemoryOrderStore, ORDER_STATUSES, type Order } from '../src/store.js';
 import { buildOrderRequest, type Buyer } from '../src/paypal.js';
 import { deferred, eventually, FakePayPal, paypalError } from './helpers.js';
@@ -685,5 +685,135 @@ describe('combined checkout (several shops, one PayPal approval)', () => {
     expect(order?.status).toBe('COMPLETED');
     expect(order?.captureId?.split(',')).toHaveLength(2);
     await eventually(() => pings.length === 2);
+  });
+});
+
+describe('seller pings are recorded and retried', () => {
+  /** A notifier whose answer per shop can be switched; records every attempt. */
+  function withFlakyPings() {
+    const paypal = new FakePayPal();
+    const store = new InMemoryOrderStore();
+    const attempts: string[] = [];
+    const down = new Set<string>();
+    const service = new OrderService({
+      platform: createPlatform(),
+      store,
+      paypal,
+      publicBaseUrl: 'https://shop.example',
+      allowSimulatedDecline: true,
+      notifier: {
+        orderCompleted: async (_order, shop) => {
+          attempts.push(shop.id);
+          return !down.has(shop.id);
+        },
+      },
+    });
+    const pay = async (items: { product_id: string; quantity: number }[]) => {
+      const result = await service.createOrder({ items });
+      if (!result.ok) throw new Error(JSON.stringify(result.issues));
+      paypal.approve(result.order.paypalOrderId);
+      await service.capture(result.order.id, 'return');
+      return result.order.id;
+    };
+    return { service, store, paypal, attempts, down, pay };
+  }
+
+  it('records a delivered ping and leaves nothing for the sweep', async () => {
+    const { service, store, attempts, pay } = withFlakyPings();
+    const id = await pay([{ product_id: 'eggs-30', quantity: 1 }]);
+    await eventually(async () => (await store.get(id))?.pingPending === false);
+    expect((await store.get(id))?.sellersPinged).toEqual(['kampung-fresh-mart']);
+    expect(await service.retrySellerPings()).toEqual({ checked: 0, delivered: 0, abandoned: 0 });
+    expect(attempts).toEqual(['kampung-fresh-mart']);
+  });
+
+  it('keeps a failed ping pending and delivers it on the next sweep', async () => {
+    const { service, store, attempts, down, pay } = withFlakyPings();
+    down.add('kampung-fresh-mart');
+    const id = await pay([{ product_id: 'eggs-30', quantity: 1 }]);
+    await eventually(() => attempts.length === 1);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await store.get(id)).toMatchObject({ status: 'COMPLETED', pingPending: true, sellersPinged: [] });
+
+    down.clear();
+    expect(await service.retrySellerPings()).toEqual({ checked: 1, delivered: 1, abandoned: 0 });
+    expect(await store.get(id)).toMatchObject({ pingPending: false, sellersPinged: ['kampung-fresh-mart'], pingAttempts: 1 });
+    expect(attempts).toEqual(['kampung-fresh-mart', 'kampung-fresh-mart']);
+  });
+
+  it('a notifier that throws counts as not delivered', async () => {
+    const paypal = new FakePayPal();
+    const store = new InMemoryOrderStore();
+    const service = new OrderService({
+      catalog: createCatalog(),
+      store,
+      paypal,
+      publicBaseUrl: 'https://shop.example',
+      allowSimulatedDecline: true,
+      notifier: { orderCompleted: async () => Promise.reject(new Error('boom')) },
+    });
+    const result = await service.createOrder(COOKIES);
+    if (!result.ok) throw new Error('create failed');
+    paypal.approve(result.order.paypalOrderId);
+    await service.capture(result.order.id, 'return');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await store.get(result.order.id)).toMatchObject({ status: 'COMPLETED', pingPending: true, sellersPinged: [] });
+  });
+
+  it('in a combined checkout, re-pings only the seller who was missed', async () => {
+    const { service, store, attempts, down, pay } = withFlakyPings();
+    down.add('kampung-fresh-mart');
+    const id = await pay([
+      { product_id: 'kuih-lapis', quantity: 1 },
+      { product_id: 'eggs-30', quantity: 1 },
+    ]);
+    await eventually(() => attempts.length === 2);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await store.get(id)).toMatchObject({ pingPending: true, sellersPinged: ['aunties-kitchen'] });
+
+    down.clear();
+    expect((await service.retrySellerPings()).delivered).toBe(1);
+    expect(attempts).toEqual(['aunties-kitchen', 'kampung-fresh-mart', 'kampung-fresh-mart']);
+    expect(await store.get(id)).toMatchObject({ pingPending: false, sellersPinged: ['aunties-kitchen', 'kampung-fresh-mart'] });
+  });
+
+  it('never pings a seller whose capture failed in a combined checkout', async () => {
+    const { service, store, paypal, attempts, down, pay } = withFlakyPings();
+    paypal.unitCaptureStatus = { 'kampung-fresh-mart': 'DECLINED' };
+    down.add('aunties-kitchen');
+    const id = await pay([
+      { product_id: 'kuih-lapis', quantity: 1 },
+      { product_id: 'eggs-30', quantity: 1 },
+    ]);
+    await eventually(() => attempts.length === 1);
+    down.clear();
+    await service.retrySellerPings();
+    expect(attempts).toEqual(['aunties-kitchen', 'aunties-kitchen']);
+    expect(await store.get(id)).toMatchObject({ pingPending: false, sellersPinged: ['aunties-kitchen'] });
+  });
+
+  it('gives up after MAX_PING_ATTEMPTS sweeps instead of retrying forever', async () => {
+    const { service, store, attempts, down, pay } = withFlakyPings();
+    down.add('kampung-fresh-mart');
+    const id = await pay([{ product_id: 'eggs-30', quantity: 1 }]);
+    await eventually(() => attempts.length === 1);
+    for (let i = 0; i < MAX_PING_ATTEMPTS; i += 1) await service.retrySellerPings();
+    expect((await store.get(id))?.pingPending).toBe(true);
+    expect(await service.retrySellerPings()).toEqual({ checked: 1, delivered: 0, abandoned: 1 });
+    expect((await store.get(id))?.pingPending).toBe(false);
+    expect(await service.retrySellerPings()).toEqual({ checked: 0, delivered: 0, abandoned: 0 });
+    expect(attempts).toHaveLength(1 + MAX_PING_ATTEMPTS);
+  });
+
+  it('marks nothing pending when no notifier is configured', async () => {
+    const paypal = new FakePayPal();
+    const store = new InMemoryOrderStore();
+    const service = new OrderService({ catalog: createCatalog(), store, paypal, publicBaseUrl: 'https://shop.example', allowSimulatedDecline: true });
+    const result = await service.createOrder(COOKIES);
+    if (!result.ok) throw new Error('create failed');
+    paypal.approve(result.order.paypalOrderId);
+    await service.capture(result.order.id, 'return');
+    expect(await store.get(result.order.id)).toMatchObject({ status: 'COMPLETED', pingPending: false });
+    expect(await service.retrySellerPings()).toEqual({ checked: 0, delivered: 0, abandoned: 0 });
   });
 });

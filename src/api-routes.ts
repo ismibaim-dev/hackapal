@@ -79,7 +79,12 @@ export function apiRoutes({ orders }: { orders: OrderService }): Router {
       return;
     }
     // Webhook evidence is for scripts (T1b), not part of the agent-facing view.
-    res.json({ ...orders.view(order), webhooks_received: orders.webhookEventsFor(order.id) });
+    res.json({
+      ...orders.view(order),
+      webhooks_received: orders.webhookEventsFor(order.id),
+      sellers_pinged: order.sellersPinged,
+      seller_ping_pending: order.pingPending,
+    });
   });
 
   router.post('/orders/:id/capture', async (req, res) => {

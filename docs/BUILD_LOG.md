@@ -40,6 +40,7 @@ Record every real use: date, tool, what was asked, what it said, and which code 
   - **Gap:** the skill doesn't cover `PayPal-Mock-Response` negative testing; that comes from PayPal's REST docs plus ContextMatic (below).
 - **2026-11-08: delivery address and two-seller checkout.** Searched the skill for `shipping_preference`, `reference_id` and multiple purchase units. `references/js-sdk-v6.md` and `fastlane.md` show `shipping_preference: "GET_FROM_FILE"` in the experience context -> `buildOrderRequest` uses it for shops that deliver. Nothing on several payees in one order (multi-party is out of the skill's scope), so that is a live probe (M3).
 - **2026-11-07: buyer details for the seller ping.** Searched the vendored skill for how to read the payer after capture (`payer`, `payment_source.paypal`, `email_address`): nothing beyond the Fastlane `payer-action` redirect. **Gap**, so the field choice came from ContextMatic and the SDK's own types (below).
+- **2026-11-10: webhook retry after a failed delivery.** Re-read `references/webhooks.md` before touching the webhook handler. It says to track processed event `id`s and skip repeats because PayPal can send the same event more than once, but nothing about a delivery whose processing failed. We had marked the id as seen *before* processing, so a redelivery after a PayPal 5xx or store outage was skipped as a duplicate of work that never happened. -> `handleWebhookEvent` now forgets the id when processing throws (still remembered before the first `await`, so concurrent duplicates are still caught). ContextMatic not used: no SDK question was involved.
 - **2026-11-06: paying each seller (option B).** Re-read `SKILL.md` and `references/checkout.md` before adding `payee` to the order request. `SKILL.md` lists "PayPal Commerce Platform (multi-party marketplaces)" under **Out of Scope** and points to the Commerce Platform docs. -> We don't use Commerce Platform (partner onboarding, `platform_fees`) for the hackathon. We use the plain Orders v2 `purchase_units[].payee`, which the checkout reference's request shape allows, with no platform fee (design decision 16).
 
 ### APIMatic Context Plugin (ContextMatic)
@@ -279,6 +280,14 @@ Assumptions (change them if wrong):
 - Baim's browser got `/health` 200 after Baim redeployed manually (~05:37). At 05:45 `/health` and an MCP `initialize` answered 200 in under a second from here too.
 - **Root cause not confirmed:** the instance looked stuck rather than just asleep (no answer for minutes), and the redeploy cleared it. If it recurs, check Render's Logs and Events for that time before redeploying.
 - **Risk for judging:** the free plan sleeps after ~15 idle minutes, and a cold start can time out a judge's first connection. Mitigation options: an uptime monitor calling `/health` every 5-10 minutes (free), or Render Starter (never sleeps).
+
+### Review pass and two fixes (2026-11-10)
+
+- **Reviewed:** the money path (`orders`, `paypal`, `paypal-http`, `paypal-auth`, routes, webhook), MCP tools, API key and rate limits, Supabase store and stock migrations, Telegram ping, and the repo for committed secrets (none in the tree or history; one commit on `main`). Baseline was green: typecheck, 220 tests, build.
+- **Fixed (two bugs, each with a test that fails without the fix):**
+  1. A webhook event id was remembered before processing, so PayPal's redelivery of an event whose first attempt failed (PayPal 5xx, store outage) was skipped as a duplicate. The id is now forgotten if processing throws.
+  2. `cleanNote` cut the buyer note with `slice(0, 300)`, which can split an emoji and leave a lone surrogate. Postgres rejects that in JSON, and Telegram would likely reject it too, so a note with an emoji at the cut could fail `create_order` after the PayPal order already existed. The note is now cut by code point (matching the column's `char_length` check) and stray surrogates are replaced.
+- **Not changed, for Baim to decide (see the PR description):** no durable record of whether the seller was pinged; oversold lines aren't shown on the seller's card; `/webhooks/paypal` has no rate limit; the per-IP `/mcp` limits key on `req.ip`, which may be a shared proxy or claude.ai egress address.
 
 ## Handoff (latest, 2026-11-06)
 

@@ -516,8 +516,20 @@ export class OrderService {
         log.info('webhook duplicate skipped', { event_id: event.id, event_type: event.event_type });
         return;
       }
+      // Remembered before any await, so two concurrent deliveries can't both get through.
       this.#rememberEvent(event.id);
     }
+    try {
+      await this.#processWebhookEvent(event);
+    } catch (err) {
+      // Processing failed (PayPal 5xx, store outage): forget the id, so a redelivery of this
+      // event is processed instead of being skipped as a duplicate of work that never happened.
+      if (event.id) this.#seenEvents.delete(event.id);
+      throw err;
+    }
+  }
+
+  async #processWebhookEvent(event: WebhookEvent): Promise<void> {
     const type = event.event_type;
     const resource = event.resource ?? {};
 
@@ -721,10 +733,22 @@ export class OrderService {
 /** Longest buyer note we keep; matches the column check in supabase/migrations. */
 export const MAX_NOTE_LENGTH = 300;
 
-/** Plain, single-spaced text, cut to MAX_NOTE_LENGTH; null when empty. */
+/** A UTF-16 surrogate with no partner: not valid text, and Postgres and Telegram reject it. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * Plain, single-spaced text, cut to MAX_NOTE_LENGTH characters; null when empty. The cut counts
+ * code points (as the column's char_length check does), so an emoji is never split in half.
+ */
 export function cleanNote(note: string | undefined): string | null {
-  const cleaned = (note ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return cleaned ? cleaned.slice(0, MAX_NOTE_LENGTH) : null;
+  const cleaned = (note ?? '')
+    .replace(LONE_SURROGATE, '\uFFFD')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return null;
+  const characters = Array.from(cleaned);
+  return characters.length > MAX_NOTE_LENGTH ? characters.slice(0, MAX_NOTE_LENGTH).join('').trimEnd() : cleaned;
 }
 
 function statusOutcome(status: OrderStatus): CaptureOutcome {

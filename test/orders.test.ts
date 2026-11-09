@@ -540,6 +540,20 @@ describe('delivery address and buyer note', () => {
     expect(cleanNote(undefined)).toBeNull();
     expect(cleanNote('x'.repeat(400))).toHaveLength(MAX_NOTE_LENGTH);
   });
+
+  it('never cuts an emoji in half or keeps a lone surrogate', () => {
+    // 299 letters + 2 emoji = 301 characters: the cut lands between the two emoji.
+    const cut = cleanNote(`${'a'.repeat(299)}\u{1F600}\u{1F600}`)!;
+    expect(Array.from(cut)).toHaveLength(MAX_NOTE_LENGTH);
+    expect(() => encodeURIComponent(cut)).not.toThrow(); // throws on a lone surrogate
+    expect(cut.endsWith('\u{1F600}')).toBe(true);
+    // A note that fits is kept whole, emoji included.
+    expect(cleanNote(`${'a'.repeat(299)}\u{1F600}`)).toBe(`${'a'.repeat(299)}\u{1F600}`);
+    // Broken input (a surrogate escape with no partner) is repaired, not stored.
+    const repaired = cleanNote('deliver \ud83d after 6pm')!;
+    expect(() => encodeURIComponent(repaired)).not.toThrow();
+    expect(repaired).toBe('deliver \uFFFD after 6pm');
+  });
 });
 
 describe('combined checkout (several shops, one PayPal approval)', () => {

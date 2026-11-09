@@ -516,8 +516,20 @@ export class OrderService {
         log.info('webhook duplicate skipped', { event_id: event.id, event_type: event.event_type });
         return;
       }
+      // Remembered before any await, so two concurrent deliveries can't both get through.
       this.#rememberEvent(event.id);
     }
+    try {
+      await this.#processWebhookEvent(event);
+    } catch (err) {
+      // Processing failed (PayPal 5xx, store outage): forget the id, so a redelivery of this
+      // event is processed instead of being skipped as a duplicate of work that never happened.
+      if (event.id) this.#seenEvents.delete(event.id);
+      throw err;
+    }
+  }
+
+  async #processWebhookEvent(event: WebhookEvent): Promise<void> {
     const type = event.event_type;
     const resource = event.resource ?? {};
 

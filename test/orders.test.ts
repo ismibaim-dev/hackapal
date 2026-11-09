@@ -201,6 +201,26 @@ describe('OrderService webhooks', () => {
     expect((await s.store.get(order.id))?.status).toBe('COMPLETED');
   });
 
+  it('processes a redelivered event after the first attempt failed', async () => {
+    const s = setup();
+    const order = await created(s);
+    s.paypal.approve(order.paypalOrderId);
+    // PayPal is down for the first capture attempt: the event fails, so it must not count as seen.
+    s.paypal.captureScript.push(paypalError(503, 'SERVICE_UNAVAILABLE'));
+    await expect(s.service.handleWebhookEvent(approved(order.paypalOrderId, 'WH-FLAKY'))).rejects.toThrow();
+    expect((await s.store.get(order.id))?.status).toBe('APPROVED');
+
+    await s.service.handleWebhookEvent(approved(order.paypalOrderId, 'WH-FLAKY'));
+    expect((await s.store.get(order.id))?.status).toBe('COMPLETED');
+    expect(s.paypal.captureCalls).toHaveLength(2);
+    // Same attempt number after a 5xx, so the retry reuses the PayPal-Request-Id.
+    expect(s.paypal.captureCalls[1]?.options.requestId).toBe(s.paypal.captureCalls[0]?.options.requestId);
+
+    // And once it has worked, a further redelivery is a duplicate again.
+    await s.service.handleWebhookEvent(approved(order.paypalOrderId, 'WH-FLAKY'));
+    expect(s.paypal.captureCalls).toHaveLength(2);
+  });
+
   it('respects simulate_decline on the webhook path too', async () => {
     const s = setup();
     const order = await created(s, true);

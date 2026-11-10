@@ -1,0 +1,382 @@
+<!doctype html>
+<!--
+  hackapal preview video: a 1920x1080 motion-graphics walkthrough, about 2:40.
+  Every animation is a paused CSS animation whose delay is its absolute start time, so
+  window.seek(seconds) renders any frame exactly. render-preview.mjs steps through the
+  frames and encodes them with ffmpeg.
+  The chat, checkout and Telegram scenes are illustrations of a real sandbox run
+  (order ord_b8a4ge0f7nzc); the home page scene is a screenshot of the live site.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#faf7f2; --ink:#1d1b18; --mute:#5a534b; --line:#e7dfd3; --accent:#b4532a; --navy:#0b3b7a; --green:#1f7a3d; --card:#fff; --soft:#f2ece3; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--ink); font-family: "Inter", "DejaVu Sans", sans-serif; }
+  .display { font-family: "Inter Display", "Inter", sans-serif; letter-spacing: -0.03em; }
+  code, .mono { font-family: "DejaVu Sans Mono", monospace; }
+
+  /* Timeline primitives. --in/--out and --t are absolute seconds. */
+  .scene { position: absolute; inset: 0; opacity: 0; animation: sIn .6s ease both, sOut .5s ease forwards; animation-delay: calc(var(--in) * 1s), calc(var(--out) * 1s); }
+  @keyframes sIn { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes sOut { from { opacity: 1 } to { opacity: 0 } }
+  .a { animation: up var(--d, .7s) cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--t) * 1s); }
+  .a.fade { animation-name: fade; }
+  .a.pop { animation-name: pop; }
+  .a.left { animation-name: fromLeft; }
+  .a.right { animation-name: fromRight; }
+  @keyframes up { from { opacity: 0; transform: translateY(34px) } to { opacity: 1; transform: none } }
+  @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes pop { 0% { opacity: 0; transform: scale(.86) } 70% { opacity: 1; transform: scale(1.03) } 100% { opacity: 1; transform: none } }
+  @keyframes fromLeft { from { opacity: 0; transform: translateX(-60px) } to { opacity: 1; transform: none } }
+  @keyframes fromRight { from { opacity: 0; transform: translateX(60px) } to { opacity: 1; transform: none } }
+
+  .caption { position: absolute; left: 0; right: 0; bottom: 64px; text-align: center; font-size: 34px; font-weight: 500; color: var(--mute); }
+  .caption b { color: var(--ink); font-weight: 700; }
+  .kicker { font-size: 24px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+  .tagline { position: absolute; left: 0; right: 0; text-align: center; }
+  h1 { font-size: 92px; font-weight: 800; line-height: 1.02; }
+  h2 { font-size: 64px; font-weight: 800; line-height: 1.05; }
+  .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .card { background: var(--card); border-radius: 28px; box-shadow: 0 18px 50px rgba(60,40,20,.12); }
+  .chip { display: inline-block; font-size: 24px; font-weight: 600; padding: 12px 24px; border-radius: 999px; background: #fff; border: 2px solid var(--line); }
+  .label { position: absolute; top: 44px; right: 56px; font-size: 20px; color: var(--mute); background: #fff; border: 2px solid var(--line); border-radius: 999px; padding: 8px 18px; }
+  .check { width: 44px; height: 44px; border-radius: 50%; background: var(--green); flex: none; display: grid; place-items: center; }
+  .check svg { width: 24px; height: 24px; }
+
+  /* 1 intro */
+  .logo { font-size: 240px; font-weight: 800; letter-spacing: -0.05em; line-height: 1; }
+  .rule { width: 0; height: 8px; background: var(--accent); border-radius: 4px; margin: 26px 0 34px; animation: grow .9s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--t) * 1s); }
+  @keyframes grow { from { width: 0 } to { width: 360px } }
+
+  /* 2 problem */
+  .sellers { display: flex; gap: 36px; margin-top: 60px; }
+  .seller { width: 420px; padding: 36px; text-align: left; }
+  .avatar { width: 84px; height: 84px; border-radius: 22px; display: grid; place-items: center; font-size: 40px; font-weight: 800; color: #fff; margin-bottom: 22px; }
+  .seller h3 { font-size: 34px; margin-bottom: 8px; }
+  .seller p { font-size: 24px; color: var(--mute); line-height: 1.35; }
+  .nosite { margin-top: 18px; font-size: 22px; font-weight: 600; color: var(--accent); }
+
+  /* 3 live site */
+  .browser { position: absolute; left: 360px; top: 110px; width: 1200px; height: 760px; overflow: hidden; }
+  .bar { height: 60px; background: var(--soft); display: flex; align-items: center; gap: 10px; padding: 0 22px; border-bottom: 2px solid var(--line); }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: #d9cfc0; }
+  .url { margin-left: 16px; flex: 1; background: #fff; border-radius: 999px; padding: 9px 20px; font-size: 20px; color: var(--mute); }
+  .shot { width: 1200px; display: block; animation: pan 9s ease-in-out both; animation-delay: calc(var(--t) * 1s); }
+  @keyframes pan { from { transform: translateY(0) } to { transform: translateY(-500px) } }
+
+  /* 4 chat */
+  .chat { position: absolute; left: 410px; top: 90px; width: 1100px; height: 800px; padding: 40px 44px; overflow: hidden; }
+  .chat-head { font-size: 22px; font-weight: 700; color: var(--mute); margin-bottom: 26px; display: flex; align-items: center; gap: 12px; }
+  .pulse { width: 14px; height: 14px; border-radius: 50%; background: var(--green); }
+  .msg { font-size: 29px; line-height: 1.4; padding: 20px 26px; border-radius: 24px; margin-bottom: 18px; max-width: 880px; }
+  .you { background: var(--ink); color: #fff; margin-left: auto; border-bottom-right-radius: 8px; width: fit-content; }
+  .ai { background: var(--soft); border-bottom-left-radius: 8px; }
+  .tool { display: inline-flex; align-items: center; gap: 10px; font-size: 21px; color: var(--mute); background: #fff; border: 2px solid var(--line); border-radius: 12px; padding: 8px 16px; margin: 0 10px 16px 0; }
+  .tool i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  .shoprow { display: flex; justify-content: space-between; gap: 20px; padding: 12px 0; border-top: 2px solid #e6ddcf; font-size: 26px; }
+  .shoprow:first-of-type { border-top: 0; }
+  .shoprow span { color: var(--mute); }
+  .orderline { display: flex; justify-content: space-between; font-size: 27px; padding: 9px 0; }
+  .orderline small { color: var(--mute); font-size: 22px; }
+  .total { display: flex; justify-content: space-between; font-size: 32px; font-weight: 800; border-top: 2px solid #d9cfc0; margin-top: 10px; padding-top: 14px; }
+  .paybtn { margin-top: 18px; background: var(--navy); color: #fff; border-radius: 16px; padding: 18px 24px; font-size: 27px; font-weight: 700; display: flex; justify-content: space-between; }
+
+  /* 5 checkout */
+  .checkout { position: absolute; left: 560px; top: 110px; width: 800px; padding: 44px 48px; }
+  .co-brand { font-size: 24px; color: var(--mute); font-weight: 600; }
+  .co-amount { font-size: 84px; font-weight: 800; margin: 6px 0 22px; }
+  .co-row { display: flex; justify-content: space-between; font-size: 26px; padding: 13px 0; border-top: 2px solid var(--line); }
+  .co-row span { color: var(--mute); }
+  .addr { margin-top: 20px; border: 3px solid var(--navy); border-radius: 18px; padding: 18px 22px; font-size: 24px; line-height: 1.4; }
+  .addr b { display: block; font-size: 20px; color: var(--navy); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 6px; }
+  .paynow { margin-top: 24px; background: var(--navy); color: #fff; border-radius: 999px; text-align: center; padding: 22px; font-size: 30px; font-weight: 800; animation: press .5s ease both; animation-delay: calc(var(--t) * 1s); }
+  @keyframes press { 0% { transform: scale(1) } 40% { transform: scale(.95); filter: brightness(.85) } 100% { transform: scale(1) } }
+  .cursor { position: absolute; left: 1500px; top: 300px; width: 0; height: 0; border-left: 26px solid var(--ink); border-top: 16px solid transparent; border-bottom: 16px solid transparent; transform: rotate(-135deg); animation: move 1.4s cubic-bezier(.3,.7,.2,1) both, sOut .3s ease forwards; animation-delay: calc(var(--t) * 1s), calc((var(--t) + 2.6) * 1s); filter: drop-shadow(0 4px 6px rgba(0,0,0,.25)); }
+  @keyframes move { from { left: 1500px; top: 300px; opacity: 0 } 15% { opacity: 1 } to { left: 1020px; top: 842px; opacity: 1 } }
+  .done { position: absolute; inset: 0; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+  .bigcheck { width: 150px; height: 150px; border-radius: 50%; background: var(--green); display: grid; place-items: center; }
+  .bigcheck svg { width: 84px; height: 84px; }
+
+  /* 6 split */
+  .source { position: absolute; left: 660px; top: 120px; width: 600px; padding: 30px; text-align: center; }
+  .source .amt { font-size: 86px; font-weight: 800; }
+  .lines { position: absolute; inset: 0; }
+  .lines path { fill: none; stroke: var(--accent); stroke-width: 7; stroke-linecap: round; stroke-dasharray: 700; stroke-dashoffset: 700; animation: draw 1.2s ease both; animation-delay: calc(var(--t) * 1s); }
+  @keyframes draw { to { stroke-dashoffset: 0 } }
+  .payee { position: absolute; top: 560px; width: 620px; padding: 34px 38px; }
+  .payee h3 { font-size: 36px; }
+  .payee .amt { font-size: 74px; font-weight: 800; margin: 6px 0 12px; }
+  .payee .row { font-size: 22px; color: var(--mute); padding: 5px 0; }
+  .badge { position: absolute; top: 36px; right: 36px; background: #e3f3e8; color: var(--green); font-weight: 800; font-size: 20px; border-radius: 999px; padding: 6px 16px; }
+  .platform { position: absolute; left: 760px; top: 640px; width: 400px; text-align: center; padding: 26px; border: 3px dashed #cfc4b4; border-radius: 24px; }
+  .platform b { display: block; font-size: 54px; margin: 6px 0; }
+
+  /* 7 telegram */
+  .phone { position: absolute; top: 60px; width: 640px; height: 880px; border-radius: 54px; background: #1d1b18; padding: 16px; }
+  .screen { width: 100%; height: 100%; border-radius: 40px; background: #dfe7ee; overflow: hidden; }
+  .tg-head { background: #fff; padding: 20px 26px; display: flex; align-items: center; gap: 16px; border-bottom: 2px solid #d5dde5; }
+  .tg-av { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 24px; }
+  .tg-name { font-size: 25px; font-weight: 700; }
+  .tg-sub { font-size: 18px; color: #6b7a88; }
+  .bubble { margin: 22px 20px; background: #fff; border-radius: 22px; border-top-left-radius: 6px; padding: 20px 22px; font-size: 21px; line-height: 1.45; white-space: pre-wrap; box-shadow: 0 2px 4px rgba(0,0,0,.08); }
+  .bubble b { font-weight: 800; }
+
+  /* 8 guardrails */
+  .rules { display: flex; gap: 34px; margin-top: 56px; }
+  .rulecard { width: 520px; padding: 40px; text-align: left; }
+  .num { width: 64px; height: 64px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 30px; font-weight: 800; display: grid; place-items: center; margin-bottom: 22px; }
+  .rulecard h3 { font-size: 36px; margin-bottom: 12px; }
+  .rulecard p { font-size: 25px; line-height: 1.42; color: var(--mute); }
+  .rulecard code { font-size: 21px; background: var(--soft); padding: 3px 9px; border-radius: 8px; color: var(--ink); }
+
+  /* 9 evidence */
+  .ev { position: absolute; left: 150px; top: 250px; width: 1000px; }
+  .evrow { display: flex; align-items: center; gap: 20px; font-size: 31px; font-weight: 500; padding: 11px 0; }
+  .stats { position: absolute; right: 150px; top: 250px; width: 480px; display: flex; flex-direction: column; gap: 24px; }
+  .stat { padding: 28px 34px; }
+  .stat b { display: block; font-size: 76px; font-weight: 800; line-height: 1; }
+  .stat > span { font-size: 24px; color: var(--mute); }
+
+  /* 10 outro */
+  .links { margin-top: 44px; font-size: 38px; font-weight: 600; line-height: 1.6; }
+  .links span { color: var(--mute); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<!-- 1. Intro -->
+<section class="scene" style="--in:0; --out:6.2">
+  <div class="center">
+    <div class="kicker a" style="--t:.4">PayPal AI Hackathon · sandbox demo</div>
+    <div class="logo display a" style="--t:.8; --d:1s">hackapal</div>
+    <div class="rule" style="--t:1.6"></div>
+    <div class="a" style="--t:2.2; font-size:46px; font-weight:500; max-width:1300px; line-height:1.3">Small sellers with no website, ready for <b>AI shopping</b>.<br>One PayPal checkout. <b>Each seller paid directly.</b></div>
+  </div>
+</section>
+
+<!-- 2. Problem -->
+<section class="scene" style="--in:6.4; --out:17.2">
+  <div class="center" style="justify-content:flex-start; padding-top:170px">
+    <div class="kicker a" style="--t:6.8">The problem</div>
+    <h2 class="display a" style="--t:7.2; margin-top:14px; max-width:1500px">AI assistants are becoming how people shop.<br>They can't buy from sellers like these.</h2>
+    <div class="sellers">
+      <div class="card seller a pop" style="--t:9.2"><div class="avatar" style="background:#b4532a">A</div><h3>Auntie's Kitchen</h3><p>Home bakery. Kuih, cookies and cakes, baked to order.</p><div class="nosite">No website. Orders by chat.</div></div>
+      <div class="card seller a pop" style="--t:9.9"><div class="avatar" style="background:#1f7a3d">K</div><h3>Kampung Fresh Mart</h3><p>Neighbourhood grocer. Same-day delivery within 5 km.</p><div class="nosite">No online checkout.</div></div>
+      <div class="card seller a pop" style="--t:10.6"><div class="avatar" style="background:#0b3b7a">K</div><h3>Kilat Home Cleaning</h3><p>Home cleaners with a few open slots this week.</p><div class="nosite">Bookings by phone.</div></div>
+    </div>
+  </div>
+  <div class="caption a fade" style="--t:12.4">hackapal gives each of them a shop that <b>any AI assistant</b> can buy from.</div>
+</section>
+
+<!-- 3. Live site -->
+<section class="scene" style="--in:17.4; --out:28.2">
+  <div class="label">Screenshot of the live site</div>
+  <div class="card browser a" style="--t:17.8">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">hackapal.onrender.com</span></div>
+    <img class="shot" style="--t:19" src="live-home.png" alt="">
+  </div>
+  <div class="caption a fade" style="--t:19">Live on PayPal sandbox: <b>three shops, one MCP link</b> for any assistant.</div>
+</section>
+
+<!-- 4a. Chat: browse -->
+<section class="scene" style="--in:28.4; --out:42.2">
+  <div class="label">Illustration of a real sandbox run</div>
+  <div class="card chat">
+    <div class="chat-head"><span class="pulse"></span>AI assistant · connected to hackapal over MCP</div>
+    <div class="msg you a fade" style="--t:29"><span class="type" data-start="29.1" data-cps="26">What shops are on hackapal?</span></div>
+    <div class="a fade" style="--t:31"><span class="tool"><i></i><code>list_shops</code></span></div>
+    <div class="msg ai a" style="--t:32">
+      <div style="margin-bottom:10px">Three shops are open right now:</div>
+      <div class="shoprow a fade" style="--t:32.8"><b>Auntie's Kitchen</b><span>Home bakery · 8 products</span></div>
+      <div class="shoprow a fade" style="--t:33.4"><b>Kampung Fresh Mart</b><span>Groceries · 6 products</span></div>
+      <div class="shoprow a fade" style="--t:34"><b>Kilat Home Cleaning</b><span>Home cleaning · 4 services</span></div>
+    </div>
+  </div>
+  <div class="caption a fade" style="--t:35">The assistant browses <b>real shops with live stock</b>.</div>
+</section>
+
+<!-- 4b. Chat: order -->
+<section class="scene" style="--in:42.4; --out:62.2">
+  <div class="label">Illustration of a real sandbox run · order ord_b8a4ge0f7nzc</div>
+  <div class="card chat">
+    <div class="chat-head"><span class="pulse"></span>AI assistant · connected to hackapal over MCP</div>
+    <div class="msg you a fade" style="--t:43"><span class="type" data-start="43.1" data-cps="30">Get me kuih lapis from Auntie's Kitchen and 2 trays of eggs from the grocer, deliver after 6pm.</span></div>
+    <div class="a fade" style="--t:47"><span class="tool"><i></i><code>list_products</code></span><span class="tool a fade" style="--t:47.8"><i></i><code>create_order</code> · one call, two shops</span></div>
+    <div class="msg ai a" style="--t:49">
+      <div class="orderline a fade" style="--t:49.6"><span><b>Auntie's Kitchen</b> <small>1 × Kuih lapis</small></span><b>$8.00</b></div>
+      <div class="orderline a fade" style="--t:50.2"><span><b>Kampung Fresh Mart</b> <small>2 × Grade A eggs</small></span><b>$11.00</b></div>
+      <div class="total a fade" style="--t:50.9"><span>One checkout</span><span>$19.00</span></div>
+      <div class="paybtn a pop" style="--t:52"><span>Open the PayPal link to pay</span><span>$19.00</span></div>
+    </div>
+  </div>
+  <div class="caption a fade" style="--t:53.5">The AI sends items and quantities. <b>The server sets every price.</b></div>
+</section>
+
+<!-- 5. Checkout -->
+<section class="scene" style="--in:62.4; --out:82.2">
+  <div class="label">Illustration of the PayPal sandbox checkout</div>
+  <div class="card checkout a" style="--t:62.8">
+    <div class="co-brand">Pay hackapal · PayPal sandbox</div>
+    <div class="co-amount display">$19.00</div>
+    <div class="co-row a fade" style="--t:64"><b>Auntie's Kitchen</b><span>$8.00</span></div>
+    <div class="co-row a fade" style="--t:64.5"><b>Kampung Fresh Mart</b><span>$11.00</span></div>
+    <div class="addr a" style="--t:66"><b>Deliver to</b>John White<br>Level 01, No 1, First Avenue Bandar Utama<br>Petaling Jaya, Selangor 47800</div>
+    <div class="paynow" style="--t:71.4">Pay Now</div>
+    <div class="done a fade" style="--t:73; border-radius:28px">
+      <div class="bigcheck a pop" style="--t:73.3"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="display a" style="--t:73.8; font-size:56px; font-weight:800">Payment complete</div>
+      <div class="a fade" style="--t:74.4; font-size:27px; color:var(--mute)">You can go back to your assistant.</div>
+    </div>
+  </div>
+  <div class="cursor" style="--t:70"></div>
+  <div class="caption a fade" style="--t:65"><b>Only the human pays.</b> PayPal collects the delivery address, not the chat.</div>
+</section>
+
+<!-- 6. Split -->
+<section class="scene" style="--in:82.4; --out:100.2">
+  <div class="label">Real capture and merchant ids from the sandbox</div>
+  <div class="card source a" style="--t:82.8"><div class="kicker">One approval · one capture call</div><div class="amt display">$19.00</div></div>
+  <svg class="lines" viewBox="0 0 1920 1080">
+    <path style="--t:84.4" d="M 860 350 C 860 470, 470 440, 470 552"/>
+    <path style="--t:84.4" d="M 1060 350 C 1060 470, 1450 440, 1450 552"/>
+  </svg>
+  <div class="card payee a pop" style="--t:85.4; left:160px">
+    <h3>Auntie's Kitchen <span class="badge a fade" style="--t:87.4">COMPLETED</span></h3>
+    <div class="amt display">$<span class="count" data-start="85.6" data-dur="1.4" data-to="8">0.00</span></div>
+    <div class="row">Merchant <code>W9JBVPFWNL5ZU</code></div>
+    <div class="row">Capture <code>6KR98118XM628793N</code></div>
+  </div>
+  <div class="card payee a pop" style="--t:85.7; left:1140px">
+    <h3>Kampung Fresh Mart <span class="badge a fade" style="--t:87.7">COMPLETED</span></h3>
+    <div class="amt display">$<span class="count" data-start="85.9" data-dur="1.4" data-to="11">0.00</span></div>
+    <div class="row">Merchant <code>YTJXJV3Y82YMJ</code></div>
+    <div class="row">Capture <code>9KP234742H667401D</code></div>
+  </div>
+  <div class="platform a fade" style="--t:89"><span style="font-size:22px; color:var(--mute)">The platform holds</span><b class="display">$0.00</b></div>
+  <div class="caption a fade" style="--t:90">One PayPal order, a purchase unit per seller. <b>Each seller paid into their own account.</b></div>
+</section>
+
+<!-- 7. Telegram -->
+<section class="scene" style="--in:100.4; --out:122.2">
+  <div class="label">From the real order cards</div>
+  <div class="phone a left" style="--t:100.8; left:200px"><div class="screen">
+    <div class="tg-head"><div class="tg-av" style="background:#b4532a">A</div><div><div class="tg-name">Auntie's Kitchen orders</div><div class="tg-sub">bot</div></div></div>
+    <div class="bubble a" style="--t:102"><b>NEW ORDER - Auntie's Kitchen</b>
+Order ord_b8a4ge0f7nzc, paid $8.00 via PayPal
+
+<b>Items</b>
+  1 x Kuih lapis ($8.00 each)  $8.00
+
+<b>Deliver to / service address</b>
+  John White
+  Level 01, No 1, First Avenue Bandar Utama
+  Petaling Jaya, Selangor 47800
+
+<b>Contact</b>
+  John White
+
+<b>Note from the buyer</b>
+  Deliver after 6pm</div>
+  </div></div>
+  <div class="phone a right" style="--t:101.2; left:940px"><div class="screen">
+    <div class="tg-head"><div class="tg-av" style="background:#1f7a3d">K</div><div><div class="tg-name">Kampung Fresh Mart orders</div><div class="tg-sub">bot</div></div></div>
+    <div class="bubble a" style="--t:103"><b>NEW ORDER - Kampung Fresh Mart</b>
+Order ord_b8a4ge0f7nzc, paid $11.00 via PayPal
+
+<b>Items</b>
+  2 x Grade A eggs ($5.50 each)  $11.00
+
+<b>Deliver to / service address</b>
+  John White
+  Level 01, No 1, First Avenue Bandar Utama
+  Petaling Jaya, Selangor 47800
+
+<b>Contact</b>
+  John White
+
+<b>Note from the buyer</b>
+  Deliver after 6pm</div>
+  </div></div>
+  <div class="caption a fade" style="--t:105; bottom:40px">Each seller gets <b>only their own items</b>, from their own shop's bot.</div>
+</section>
+
+<!-- 8. Guardrails -->
+<section class="scene" style="--in:122.4; --out:138.2">
+  <div class="center">
+    <div class="kicker a" style="--t:122.8">Built for real money</div>
+    <h2 class="display a" style="--t:123.2; margin-top:14px">The AI does the shopping.<br>The server guards the money.</h2>
+    <div class="rules">
+      <div class="card rulecard a pop" style="--t:125"><div class="num">1</div><h3>Prices from the server</h3><p>The model sends product ids and quantities only. Asking for a discount changes nothing.</p></div>
+      <div class="card rulecard a pop" style="--t:126"><div class="num">2</div><h3>Safe to retry</h3><p><code>PayPal-Request-Id</code> on every call, verified webhooks, stock taken exactly once.</p></div>
+      <div class="card rulecard a pop" style="--t:127"><div class="num">3</div><h3>Paid means PayPal says so</h3><p>The assistant says "paid" only when <code>get_order_status</code> is COMPLETED.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 9. Evidence -->
+<section class="scene" style="--in:138.4; --out:150.2">
+  <div style="position:absolute; left:150px; top:110px">
+    <div class="kicker a" style="--t:138.8">Proven in the PayPal sandbox</div>
+    <h2 class="display a" style="--t:139.2; margin-top:12px">Every check passed, with real ids.</h2>
+  </div>
+  <div class="ev" id="ev"></div>
+  <div class="stats">
+    <div class="card stat a right" style="--t:141"><b class="display"><span class="count" data-start="141.2" data-dur="1.6" data-to="234" data-int="1">0</span></b><span>automated tests passing</span></div>
+    <div class="card stat a right" style="--t:141.6"><b class="display"><span class="count" data-start="141.8" data-dur="1.4" data-to="17" data-int="1">0</span></b><span>paid sandbox orders, none stuck</span></div>
+    <div class="card stat a right" style="--t:142.2"><b class="display">0</b><span>known dependency vulnerabilities</span></div>
+  </div>
+</section>
+
+<!-- 10. Outro -->
+<section class="scene" style="--in:150.4; --out:161">
+  <div class="center">
+    <div class="logo display a" style="--t:150.8; font-size:200px">hackapal</div>
+    <div class="rule" style="--t:151.6"></div>
+    <div class="a" style="--t:152.2; font-size:42px; font-weight:500">Agent-ready micro-stores. One checkout. Each seller paid directly.</div>
+    <div class="links a" style="--t:153.4"><span>Try it</span> hackapal.onrender.com<br><span>Code</span> github.com/ismibaim-dev/hackapal</div>
+    <div class="a fade" style="--t:155; margin-top:40px; display:flex; gap:14px"><span class="chip">PayPal Orders v2</span><span class="chip">MCP</span><span class="chip">Claude</span><span class="chip">Supabase</span><span class="chip">Telegram</span></div>
+  </div>
+</section>
+
+<script>
+  // Evidence rows, staggered.
+  const checks = [
+    'Server creates and captures the payment',
+    'Webhooks verified with the raw body',
+    'Declined card recovered by the buyer',
+    'End to end from an AI assistant connector',
+    'Seller paid into their own PayPal account',
+    'Order cards only to the right seller',
+    'Address from PayPal, note from the buyer',
+    'One checkout pays two sellers directly',
+  ];
+  const tick = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  document.getElementById('ev').innerHTML = checks
+    .map((text, i) => `<div class="evrow a left" style="--t:${(140.4 + i * 0.5).toFixed(2)}"><span class="check">${tick}</span>${text}</div>`)
+    .join('');
+
+  const typed = [...document.querySelectorAll('.type')].map((el) => ({ el, text: el.textContent, start: +el.dataset.start, cps: +el.dataset.cps }));
+  const counts = [...document.querySelectorAll('.count')].map((el) => ({ el, start: +el.dataset.start, dur: +el.dataset.dur, to: +el.dataset.to, int: el.dataset.int === '1' }));
+
+  /** Render the frame at `t` seconds. Pure: the same t always gives the same picture. */
+  window.seek = (t) => {
+    for (const anim of document.getAnimations()) {
+      anim.pause();
+      anim.currentTime = t * 1000;
+    }
+    for (const { el, text, start, cps } of typed) {
+      el.textContent = text.slice(0, Math.max(0, Math.floor((t - start) * cps)));
+    }
+    for (const { el, start, dur, to, int } of counts) {
+      const p = Math.min(1, Math.max(0, (t - start) / dur));
+      const value = to * (1 - Math.pow(1 - p, 3));
+      el.textContent = int ? String(Math.round(value)) : value.toFixed(2);
+    }
+  };
+  window.DURATION = 161;
+  window.seek(0);
+</script>
+</body>
+</html>

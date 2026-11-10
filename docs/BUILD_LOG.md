@@ -305,13 +305,30 @@ Assumptions (change them if wrong):
 - **Tests:** 233 passing (11 new), 5 skipped (live Supabase). New: delivered ping leaves nothing pending; failed ping delivered by the next sweep; a throwing notifier counts as not delivered; combined checkout re-pings only the missed seller; a seller whose capture failed is never pinged; give-up after `MAX_PING_ATTEMPTS`; no notifier means nothing pending; store contract for the new fields; Supabase store before the migration (status still saved, columns skipped, sweep empty).
 - **Needs Baim:** run `supabase/migrations/20261110000000_seller_pings.sql` in the Supabase SQL editor for project `hackapal`. Safe on the live table (every column has a default). Not proven live yet: a paid order with Telegram temporarily broken, then fixed, should be pinged within about 5 minutes.
 
-## Handoff (latest, 2026-11-06)
+### Pre-submission audit (2026-11-10)
 
-1. Merge the marketplace PR; Render redeploys. Check `/health` lists three shops and that https://hackapal.onrender.com shows the directory.
-2. After the deploy, prove it through the shop itself: `npm run money-path -- --base-url https://hackapal.onrender.com --product eggs-30`, Baim approves, and the order should reach `COMPLETED` (the return page captures even if no webhook comes, see M2).
-3. Baim: restock Auntie's Kitchen with `npm run stock` if needed, rename the claude.ai connector to `hackapal`, and trim the PayPal webhook to the three handled events (finishing touch).
-3b. S6: Telegram group per shop with the bot, `npm run telegram-chats`, set `TELEGRAM_SHOP_CHATS` on Render, then a paid grocer order should ping only the grocer's group and name the buyer.
-4. Then: demo video, Devpost write-up.
+- **Checked, all fine:**
+  - `main` = deployed commit `d79e0ba`; typecheck, 233 tests and build green; `npm audit --omit=dev` reports 0 vulnerabilities.
+  - Live: `/api` answers 401 without or with a wrong key; an unsigned webhook is refused (400 `invalid_signature`); the return page escapes a `<script>` token.
+  - Supabase (read-only): all three migrations applied, RLS on every table, `anon` and `authenticated` have no table or `take_stock` access; the only advisor notes are the expected "RLS enabled, no policy" (server-only tables).
+  - Live data: 17 `COMPLETED` and 5 unpaid `CREATED` orders, none stuck in between, no seller ping pending, no oversold line.
+  - No secrets, bot tokens or chat ids in tracked files.
+- **Fixed:** the server sent no browser security headers. Every response now has `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and a `Content-Security-Policy` that allows only inline CSS (our pages have no scripts). Stale docs corrected (the "one order, one shop" rule in `CLAUDE.md` and `orders.ts`, the test count, this handoff).
+- **Known limits, accepted for the hackathon:**
+  - `/mcp` is public by design (decision 15). Its per-IP limits key on the address our proxy reports, which behind Render and for claude.ai is shared by many users, so they act as shared buckets, not per-person limits.
+  - Creating an order doesn't reserve stock; two buyers can both pay for the last unit. It is logged as `oversold` and not shown on the seller's card.
+  - No refunds or cancellations after payment; a combined checkout where one seller's capture fails completes for the others and is only logged.
+  - Free hosting: kept awake by an uptime monitor; in-memory rate limits and webhook de-duplication reset on restart (captures stay safe through PayPal-Request-Id and the stock ledger).
+  - Sandbox only; paying several merchants in one order may need a marketplace agreement in production.
+
+## Handoff (latest, 2026-11-10)
+
+Everything on the status board is PASS and deployed. Remaining before the deadline (2026-11-12 12:00 PST), all on Baim's side:
+
+1. Restock low items before judging (kuih lapis was at 5): `npm run stock -- --base-url https://hackapal.onrender.com --set kuih-lapis=30 ...` with the API key.
+2. Record the demo clips (script in `docs/SUBMISSION.md`), get the edited video onto YouTube, and put the link in the README (`Demo video`) and on Devpost.
+3. Fill in the Devpost form from `docs/SUBMISSION.md`; the sandbox buyer login goes on Devpost only.
+4. Open `/health` once right before submitting and check the uptime monitor is green.
 
 ## Handoff to session 3
 

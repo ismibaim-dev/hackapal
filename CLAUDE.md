@@ -12,7 +12,7 @@ hackapal is an agent-ready micro-store for the PayPal AI Hackathon (Devpost, dea
 
 - Sandbox only (config refuses anything else). USD. Integer cents everywhere; decimal strings only at the PayPal and display edges (`src/money.ts`).
 - Orders are created and priced on the server only, from `src/catalog.ts` via `priceCart`. Never accept prices from the model or the client.
-- One order belongs to one shop. Its PayPal `brand_name` and `payee` come only from that shop in `src/catalog.ts`, never from the caller. Never show a seller's PayPal account to agents. Product ids must stay unique across shops (`src/platform.ts` enforces it).
+- Each shop's part of an order is its own PayPal purchase unit, and its `payee` comes only from that shop in `src/catalog.ts`, never from the caller. A cart from several shops is one PayPal order with one unit per shop (combined checkout, design decision 18); `shop_id` restricts an order to one shop. Never show a seller's PayPal account to agents. Product ids must stay unique across shops (`src/platform.ts` enforces it).
 - `PayPal-Request-Id` on every PayPal POST. Capture key: `capture-<orderId>-<attempt>`.
 - Cache the OAuth token until shortly before expiry. Credentials come only from env vars; never log, print or commit them.
 - Retry 429/5xx with backoff (POSTs are safe to retry thanks to `PayPal-Request-Id`). Log the PayPal `debug_id` on every error.

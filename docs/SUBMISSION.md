@@ -41,7 +41,7 @@ Many of the best small sellers have no website. They include the home baker taki
 - **Sponsor tools, used before writing PayPal code and logged in the build log:**
   - **APIMatic ContextMatic** answered SDK questions (models, controllers, retry and auth configuration, payee, shipping and payer fields). Reading the SDK source to check its answers led us to fix real issues (see Challenges).
   - **PayPal's AI Toolkit skill (`paypal-best-practices`)** set the rules we follow: idempotency keys, token caching, webhook verification and decline handling.
-- **Testing:** 220 unit tests (vitest), plus scripts that drive the live sandbox end to end. Every check on the status board was proven with real sandbox orders, capture ids and merchant ids.
+- **Testing:** 230+ unit tests (vitest), plus scripts that drive the live sandbox end to end. Every check on the status board was proven with real sandbox orders, capture ids and merchant ids.
 
 ### Challenges we ran into
 

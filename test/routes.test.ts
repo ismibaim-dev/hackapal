@@ -84,6 +84,20 @@ describe('GET /health', () => {
   });
 });
 
+describe('security headers', () => {
+  it('are sent on pages, JSON and errors alike', async () => {
+    const { base } = await start();
+    for (const path of ['/', '/health', '/paypal/return?token=nope', '/no-such-page']) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+      expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(res.headers.get('content-security-policy')).toContain("default-src 'none'");
+      expect(res.headers.get('x-powered-by')).toBeNull();
+    }
+  });
+});
+
 describe('GET /', () => {
   it('lists every shop with its own MCP link', async () => {
     const { base } = await start();

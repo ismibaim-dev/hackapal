@@ -14,7 +14,8 @@ import { FINAL_STATUSES, newOrderId, type Order, type OrderPatch, type OrderStat
  *
  * Invariants:
  * - Prices come from the shop's catalog via priceCart, never from the caller.
- * - One order belongs to one shop: its brand name and PayPal payee come from that shop.
+ * - Each shop's part of an order is its own PayPal purchase unit: brand name and payee come from
+ *   that shop's catalog entry. One shop gives one unit; a mixed cart gives one unit per shop.
  * - One capture call per order at a time (single-flight); its PayPal-Request-Id is
  *   capture-<orderId>-<attempt>, and the attempt goes up after every definitive
  *   rejection (4xx), so a later capture never replays a cached error.

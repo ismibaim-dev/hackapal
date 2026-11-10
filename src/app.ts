@@ -25,6 +25,19 @@ export function createApp({ config, orders, paypal, mcpLimits }: AppDeps): Expre
   // Render terminates TLS in front of us; trust its X-Forwarded-* headers.
   app.set('trust proxy', 1);
 
+  // Browser hardening for every response. Our pages are static HTML with inline CSS and no
+  // scripts, so the policy allows nothing else; no page may be framed (the return page shows a
+  // payment result); and the PayPal order token in the return URL is never sent on as a referrer.
+  app.use((_req, res, next) => {
+    res.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    });
+    next();
+  });
+
   // No global express.json() on purpose: the PayPal webhook route needs the raw,
   // unmodified body to verify the signature, so body parsers are mounted per route.
 

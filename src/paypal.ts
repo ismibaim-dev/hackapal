@@ -380,6 +380,8 @@ export function buildOrderRequest({
       paypal: {
         experienceContext: {
           brandName,
+          // English checkout pages, whatever the buyer's region (the demo buyer is in Malaysia).
+          locale: 'en-US',
           userAction: PaypalExperienceUserAction.PayNow,
           // GET_FROM_FILE: the buyer picks or adds an address in PayPal; it comes back on the purchase unit.
           shippingPreference: collectAddress

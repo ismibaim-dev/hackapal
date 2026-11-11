@@ -3,6 +3,7 @@ import { log } from './log.js';
 import { formatUsd } from './money.js';
 import type { SellerNotifier } from './orders.js';
 import type { Buyer } from './paypal.js';
+import { receiptNumber, renderReceiptPdf } from './receipt.js';
 import type { FetchLike } from './paypal-http.js';
 import type { Order } from './store.js';
 
@@ -28,6 +29,8 @@ export interface TelegramNotifierOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Retries after the first attempt, for 429 and 5xx. */
   maxRetries?: number;
+  /** Send a PDF receipt after each order card. Default true. */
+  receipts?: boolean;
 }
 
 function sendMessageUrl(botToken: string): string {
@@ -42,6 +45,7 @@ export class TelegramNotifier implements SellerNotifier {
   readonly #fetch: FetchLike;
   readonly #sleep: (ms: number) => Promise<void>;
   readonly #maxRetries: number;
+  readonly #receipts: boolean;
 
   constructor(options: TelegramNotifierOptions) {
     this.#url = sendMessageUrl(options.botToken);
@@ -51,6 +55,7 @@ export class TelegramNotifier implements SellerNotifier {
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#maxRetries = options.maxRetries ?? 2;
+    this.#receipts = options.receipts ?? true;
   }
 
   /**
@@ -75,21 +80,50 @@ export class TelegramNotifier implements SellerNotifier {
     const text = formatOrderMessage(order, shop.name, buyer);
     const { url, chatId, ownChat, ownBot } = this.#routeFor(shop.id);
     const body = JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true });
+    const sent = await this.#call(url, () => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body }), order.id, 'telegram ping');
+    if (!sent) return false;
+    log.info('seller pinged on telegram', { order_id: order.id, shop_id: shop.id, shop_chat: ownChat, shop_bot: ownBot, buyer_known: Boolean(buyer) });
 
+    // The PDF receipt follows the card. The card is what counts as "seller reached": if the
+    // PDF fails we log it and stop, so the retry sweep never sends the card twice.
+    if (this.#receipts) {
+      try {
+        const pdf = await renderReceiptPdf(order, shop, buyer);
+        const filename = `receipt-${receiptNumber(order, shop)}.pdf`;
+        const docUrl = url.replace(/sendMessage$/, 'sendDocument');
+        const ok = await this.#call(
+          docUrl,
+          () => {
+            const form = new FormData();
+            form.append('chat_id', chatId);
+            form.append('caption', `Receipt ${receiptNumber(order, shop)} · ${formatUsd(order.totalCents)} paid via PayPal`);
+            form.append('document', new Blob([new Uint8Array(pdf)], { type: 'application/pdf' }), filename);
+            return { method: 'POST', body: form };
+          },
+          order.id,
+          'telegram receipt',
+        );
+        if (ok) log.info('receipt pdf sent on telegram', { order_id: order.id, shop_id: shop.id, bytes: pdf.length });
+      } catch (err) {
+        log.warn('receipt pdf could not be built', { order_id: order.id, shop_id: shop.id, err });
+      }
+    }
+    return true;
+  }
+
+  /** One Bot API call with retries on 429 (honouring retry_after), 5xx and network errors. */
+  async #call(url: string, init: () => RequestInit, orderId: string, what: string): Promise<boolean> {
     for (let attempt = 0; ; attempt += 1) {
       let status = 0;
       let description: string | undefined;
       let retryAfterSeconds: number | undefined;
       try {
-        const res = await this.#fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+        const res = await this.#fetch(url, init());
         status = res.status;
         const json = (await res.json().catch(() => undefined)) as
           | { ok?: boolean; description?: string; parameters?: { retry_after?: number } }
           | undefined;
-        if (res.ok && json?.ok) {
-          log.info('seller pinged on telegram', { order_id: order.id, shop_id: shop.id, shop_chat: ownChat, shop_bot: ownBot, buyer_known: Boolean(buyer) });
-          return true;
-        }
+        if (res.ok && json?.ok) return true;
         description = json?.description;
         retryAfterSeconds = json?.parameters?.retry_after;
       } catch (err) {
@@ -102,7 +136,7 @@ export class TelegramNotifier implements SellerNotifier {
         continue;
       }
       // Never include the URL: it carries the bot token.
-      log.warn('telegram ping failed', { order_id: order.id, status, description });
+      log.warn(`${what} failed`, { order_id: orderId, status, description });
       return false;
     }
   }

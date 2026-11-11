@@ -45,6 +45,8 @@ Record every real use: date, tool, what was asked, what it said, and which code 
 
 ### APIMatic Context Plugin (ContextMatic)
 
+- **2026-11-11: checkout language.** `model_search PaypalWalletExperienceContext` confirmed a `locale` field (BCP 47 tag). Its description says it localises error-related strings, so we don't claim more than that. -> `buildOrderRequest` sends `locale: 'en-US'`; a sandbox order with it was accepted (local server, PayPal `91U88909HW938893X`).
+
 - **2026-11-08: address and multiple purchase units.** `ask`: "Can one createOrder contain multiple purchaseUnits, each with a different payee, captured in one call?" -> the model allows per-unit `payee`, `reference_id` is required on each unit when there are several, but **cross-merchant support isn't documented**, so we probe it (M3). `model_search ShippingWithTrackingDetails` -> `purchaseUnits[].shipping` has `name.fullName`, `address` (`addressLine1/2`, `adminArea2` city, `adminArea1` state, `postalCode`, `countryCode`) and `phoneNumber.nationalNumber` -> `summarize()` reads them into the buyer's `shipTo` and `phone`.
 - **2026-11-07: who paid (seller ping).** `fetch_api(typescript, "paypal")`, then `model_search` for `Payer` (`emailAddress`, `payerId`, `name`, `phone`, ...) and `PaypalWalletResponse` (`emailAddress`, `name`, `accountId`, ...; it sits at `Order.paymentSource.paypal`). The installed SDK's `Order` type marks top-level `payer` as **deprecated** in favour of `payment_source.paypal`, and `Name` has `givenName` and `surname`. -> `summarize()` in `src/paypal.ts` reads the buyer from `paymentSource.paypal` and falls back to `payer`.
 
@@ -129,6 +131,11 @@ Added in session 2, while building Phase 1:
     - **Deploy order doesn't matter:** until the migration runs, the Supabase store notices the missing columns, saves the payment status without them and logs one warning. Payments are never blocked by ping bookkeeping; pings just aren't retried yet.
     - Pings still happen while the instance is awake: on the free plan the sweep only runs while the uptime pinger keeps it up.
     - `GET /api/orders/:id` shows `sellers_pinged` and `seller_ping_pending`.
+21. **Each seller also gets a PDF receipt on Telegram** (Baim, 2026-11-11: "not just a text but a pdf every time", "change language to english").
+    - After the order card, the shop's bot sends a one-page A4 receipt (`sendDocument`): seller, receipt number (unique per order and seller), order id, paid date, buyer, delivery address, items with unit prices, total, PayPal capture id and the buyer's note. Built in memory with `pdfkit`, never stored or logged; it goes only to that seller's chat.
+    - The card is what counts as "seller reached". If the PDF fails it is logged and not retried, so the retry sweep never sends the card twice.
+    - Built-in PDF fonts cover Latin-1 only, so other characters print as `?` instead of breaking the file.
+    - The buyer's receipt stays PayPal's own (in the buyer's sandbox account). Checkout asks PayPal for English (`locale: en-US`); what PayPal shows after login also depends on the buyer account's own language setting.
 
 Assumptions (change them if wrong):
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AUNTIES_KITCHEN, KAMPUNG_FRESH_MART } from '../src/catalog.js';
 import type { Order } from '../src/store.js';
 import { formatOrderMessage, TelegramNotifier } from '../src/telegram.js';
+import { receiptNumber, renderReceiptPdf } from '../src/receipt.js';
 import { fakeFetch, jsonResponse } from './helpers.js';
 
 const TOKEN = '123456:TEST-secret-bot-token';
@@ -36,7 +37,7 @@ const order: Order = {
 function notifier(handler: Parameters<typeof fakeFetch>[0]) {
   const f = fakeFetch(handler);
   const sleeps: number[] = [];
-  const n = new TelegramNotifier({
+  const n = new TelegramNotifier({ receipts: false,
     botToken: TOKEN,
     chatId: '-100123',
     fetch: f,
@@ -94,7 +95,7 @@ describe('formatOrderMessage', () => {
 describe('TelegramNotifier', () => {
   it("sends each shop's order to that shop's own chat, and the rest to the default chat", async () => {
     const f = fakeFetch(() => jsonResponse(200, { ok: true }));
-    const n = new TelegramNotifier({ botToken: TOKEN, chatId: '-100123', shopChats: { 'kampung-fresh-mart': '-100777' }, fetch: f });
+    const n = new TelegramNotifier({ receipts: false, botToken: TOKEN, chatId: '-100123', shopChats: { 'kampung-fresh-mart': '-100777' }, fetch: f });
     await n.orderCompleted(order, KAMPUNG_FRESH_MART, { email: 'siti@personal.example.com' });
     await n.orderCompleted(order, AUNTIES_KITCHEN);
     const chats = f.calls.map((c) => JSON.parse(String(c.init.body)).chat_id);
@@ -105,7 +106,7 @@ describe('TelegramNotifier', () => {
 
   it("sends from a shop's own bot to its own chat, and falls back to the default bot otherwise", async () => {
     const f = fakeFetch(() => jsonResponse(200, { ok: true }));
-    const n = new TelegramNotifier({
+    const n = new TelegramNotifier({ receipts: false,
       botToken: TOKEN,
       chatId: '-100123',
       shopChats: { 'kampung-fresh-mart': '-100777', 'kilat-home-cleaning': '-100888' },
@@ -131,7 +132,7 @@ describe('TelegramNotifier', () => {
     process.env.LOG_LEVEL = 'info';
     const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const n = new TelegramNotifier({
+    const n = new TelegramNotifier({ receipts: false,
       botToken: TOKEN,
       chatId: '-100123',
       shopChats: { 'kampung-fresh-mart': '-100777' },
@@ -196,5 +197,60 @@ describe('TelegramNotifier', () => {
     });
     await expect(n.orderCompleted(order, AUNTIES_KITCHEN)).resolves.toBe(false);
     expect(calls).toHaveLength(3);
+  });
+});
+
+describe('PDF receipt', () => {
+  const buyer = {
+    name: 'Siti Aminah',
+    email: 'siti@personal.example.com',
+    shipTo: { name: 'Siti Aminah', lines: ['12 Jalan Mawar', 'Shah Alam, Selangor 40000', 'MY'] },
+  };
+
+  it('is a one-page PDF titled with the receipt number, and survives text the PDF fonts cannot draw', async () => {
+    const pdf = await renderReceiptPdf({ ...order, buyerNote: 'Deliver after 6pm 🙂 谢谢' }, KAMPUNG_FRESH_MART, buyer, { compress: false });
+    const raw = pdf.toString('latin1');
+    expect(raw.startsWith('%PDF-')).toBe(true);
+    expect(raw).toContain(`Receipt ${receiptNumber(order, KAMPUNG_FRESH_MART)}`);
+    expect(raw.match(/\/Type \/Page\b/g)).toHaveLength(1);
+    // Without the buyer (PayPal shared nothing) it still renders.
+    const bare = await renderReceiptPdf(order, AUNTIES_KITCHEN, undefined);
+    expect(bare.subarray(0, 5).toString()).toBe('%PDF-');
+  });
+
+  it('gives each seller in a combined checkout its own receipt number', () => {
+    expect(receiptNumber(order, AUNTIES_KITCHEN)).toBe('R-ZP6HT17JMJZP-AK');
+    expect(receiptNumber(order, KAMPUNG_FRESH_MART)).toBe('R-ZP6HT17JMJZP-KFM');
+  });
+
+  it('is sent after the order card with sendDocument, to the same chat and bot', async () => {
+    const f = fakeFetch(() => jsonResponse(200, { ok: true }));
+    const n = new TelegramNotifier({ botToken: TOKEN, chatId: '-100123', shopChats: { 'kampung-fresh-mart': '-100777' }, shopBots: { 'kampung-fresh-mart': '777:grocer-bot' }, fetch: f });
+    expect(await n.orderCompleted(order, KAMPUNG_FRESH_MART, buyer)).toBe(true);
+    expect(f.calls.map((c) => c.url)).toEqual([
+      'https://api.telegram.org/bot777:grocer-bot/sendMessage',
+      'https://api.telegram.org/bot777:grocer-bot/sendDocument',
+    ]);
+    const form = f.calls[1]!.init.body as FormData;
+    expect(form.get('chat_id')).toBe('-100777');
+    expect(String(form.get('caption'))).toContain('$20.00 paid via PayPal');
+    const file = form.get('document') as File;
+    expect(file.name).toBe(`receipt-${receiptNumber(order, KAMPUNG_FRESH_MART)}.pdf`);
+    expect(file.type).toBe('application/pdf');
+    expect(Buffer.from(await file.arrayBuffer()).subarray(0, 5).toString()).toBe('%PDF-');
+  });
+
+  it('still counts the seller as reached when only the PDF fails, so the card is never resent', async () => {
+    const f = fakeFetch((call) => (call.url.endsWith('sendDocument') ? jsonResponse(400, { ok: false, description: 'Bad Request' }) : jsonResponse(200, { ok: true })));
+    const n = new TelegramNotifier({ botToken: TOKEN, chatId: '-100123', fetch: f, sleep: async () => undefined });
+    expect(await n.orderCompleted(order, AUNTIES_KITCHEN, buyer)).toBe(true);
+    expect(f.calls).toHaveLength(2);
+  });
+
+  it('sends no PDF when the order card itself failed', async () => {
+    const f = fakeFetch(() => jsonResponse(400, { ok: false, description: 'chat not found' }));
+    const n = new TelegramNotifier({ botToken: TOKEN, chatId: '-100123', fetch: f });
+    expect(await n.orderCompleted(order, AUNTIES_KITCHEN)).toBe(false);
+    expect(f.calls.map((c) => c.url.split('/').pop())).toEqual(['sendMessage']);
   });
 });

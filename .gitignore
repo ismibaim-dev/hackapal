@@ -13,3 +13,5 @@ coverage/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+docs/media/.frames/
+docs/media/preview.mp4

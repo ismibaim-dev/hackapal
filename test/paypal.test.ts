@@ -139,6 +139,7 @@ describe('buildOrderRequest', () => {
         paypal: {
           experienceContext: {
             brandName: "Auntie's Kitchen",
+            locale: 'en-US',
             userAction: 'PAY_NOW',
             shippingPreference: 'NO_SHIPPING',
             returnUrl: 'https://shop.example/paypal/return',

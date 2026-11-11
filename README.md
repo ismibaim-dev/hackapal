@@ -19,7 +19,7 @@ The demo runs on PayPal **sandbox**: no real money moves. It takes about five mi
 - **The model can't set prices.** `create_order` takes product ids and quantities only, and the server prices the cart from its own catalog. Try asking Claude to give you a discount.
 - **Only the human pays.** Claude hands over a link and never claims payment until PayPal confirms the capture.
 - **Stock counts down** only after payment, exactly once per order, even when PayPal's webhook and the return page both report the payment.
-- **Only the right seller gets a Telegram order card** for each paid order, from that shop's own bot: items, total, the delivery address the buyer chose in PayPal, the buyer's contact, and any note they gave Claude ("after 6pm, blue gate"), and a declined card is recovered by sending the buyer back to PayPal to choose another way to pay. Both are shown in the demo video, because they happen on the seller's phone and through sandbox negative testing.
+- **Only the right seller gets a Telegram order card and a PDF receipt** for each paid order, from that shop's own bot: items, total, the delivery address the buyer chose in PayPal, the buyer's contact, and any note they gave Claude ("after 6pm, blue gate"), and a declined card is recovered by sending the buyer back to PayPal to choose another way to pay. Both are shown in the demo video, because they happen on the seller's phone and through sandbox negative testing.
 
 **Without claude.ai:** any MCP client that speaks Streamable HTTP works. For example, `npx @modelcontextprotocol/inspector` with transport "Streamable HTTP" and the URL above, or `npm run mcp-smoke -- https://hackapal.onrender.com/mcp` from a clone of this repo.
 

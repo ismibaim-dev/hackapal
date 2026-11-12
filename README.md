@@ -27,7 +27,7 @@ The demo runs on PayPal **sandbox**: no real money moves. It takes about five mi
 - `/mcp` is public but rate-limited: 120 requests a minute per IP, and at most 20 new orders per IP (60 in total) per 10 minutes. Wait a few minutes if Claude reports that the shop is busy.
 - An unpaid order simply expires; nothing is charged.
 
-**Demo video:** _[link to be added]_
+**Demo video:** https://youtu.be/ielAeO1ujPE (2:36, one real sandbox order from the chat to both sellers' receipts)
 
 ## How it works
 
